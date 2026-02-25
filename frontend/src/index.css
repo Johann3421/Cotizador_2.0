@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-kenya-600 text-white px-6 py-2.5 rounded-lg font-medium 
+           hover:bg-kenya-700 transition-colors duration-200 
+           focus:outline-none focus:ring-2 focus:ring-kenya-500 focus:ring-offset-2
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-gray-700 px-6 py-2.5 rounded-lg font-medium 
+           border border-gray-300 hover:bg-gray-50 
+           transition-colors duration-200 
+           focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply text-gray-500 px-4 py-2 rounded-lg font-medium 
+           hover:bg-gray-100 hover:text-gray-700
+           transition-colors duration-200;
+  }
+
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-gray-200 p-6;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-2.5 rounded-lg border border-gray-300 
+           text-sm focus:outline-none focus:ring-2 focus:ring-kenya-500 focus:border-kenya-500
+           placeholder-gray-400 transition-all duration-200;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  
+  .badge-green {
+    @apply bg-green-100 text-green-800;
+  }
+  
+  .badge-yellow {
+    @apply bg-yellow-100 text-yellow-800;
+  }
+  
+  .badge-red {
+    @apply bg-red-100 text-red-800;
+  }
+  
+  .badge-blue {
+    @apply bg-blue-100 text-blue-800;
+  }
+  
+  .badge-gray {
+    @apply bg-gray-100 text-gray-800;
+  }
+}
+
+/* Stepper styles */
+.stepper-active {
+  @apply bg-kenya-600 text-white;
+}
+.stepper-completed {
+  @apply bg-green-500 text-white;
+}
+.stepper-inactive {
+  @apply bg-gray-200 text-gray-500;
+}
+
+/* Score coloring */
+.score-high {
+  @apply text-green-600 bg-green-50;
+}
+.score-medium {
+  @apply text-yellow-600 bg-yellow-50;
+}
+.score-low {
+  @apply text-red-600 bg-red-50;
+}
+
+/* Brand colors */
+.brand-kenya {
+  @apply bg-red-50 border-red-200 text-red-700;
+}
+.brand-lenovo {
+  @apply bg-blue-50 border-blue-200 text-blue-700;
+}
+.brand-hp {
+  @apply bg-cyan-50 border-cyan-200 text-cyan-700;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: theme('colors.kenya.300'); }
+  50% { border-color: theme('colors.kenya.500'); }
+}
+
+.animate-pulse-border {
+  animation: pulse-border 2s ease-in-out infinite;
+}

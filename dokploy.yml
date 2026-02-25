@@ -1,0 +1,21 @@
+name: kenya-quotation-system
+version: "1.0"
+
+services:
+  - name: backend
+    type: dockerfile
+    context: ./backend
+    dockerfile: ./backend/Dockerfile
+    port: 3001
+    envFile: .env
+
+  - name: frontend
+    type: dockerfile
+    context: ./frontend
+    dockerfile: ./frontend/Dockerfile
+    port: 80
+
+  - name: database
+    type: postgres
+    version: "15"
+    envFile: .env

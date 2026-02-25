@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: kenya_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-kenya_quotes}
+      POSTGRES_USER: ${DB_USER:-kenya}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-kenya_secure_2024}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/src/db/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-kenya} -d ${DB_NAME:-kenya_quotes}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kenya_network
+
+  backend:
+    build: ./backend
+    container_name: kenya_backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_URL=postgresql://${DB_USER:-kenya}:${DB_PASSWORD:-kenya_secure_2024}@postgres:5432/${DB_NAME:-kenya_quotes}
+      - AI_API_KEY=${AI_API_KEY}
+      - AI_PROVIDER=${AI_PROVIDER:-openai}
+      - AI_MODEL=${AI_MODEL:-gpt-4o}
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-10}
+      - QUOTE_PREFIX=${QUOTE_PREFIX:-KEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - kenya_network
+
+  frontend:
+    build: ./frontend
+    container_name: kenya_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - kenya_network
+
+volumes:
+  postgres_data:
+    driver: local
+  uploads_data:
+    driver: local
+
+networks:
+  kenya_network:
+    driver: bridge
