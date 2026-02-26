@@ -54,10 +54,18 @@ const scrapearMarca = async (marca, tipo) => {
 
   console.log(`[Scraper] Scraping: "${termino}"`);
 
-  const browser = await chromium.launch({
-    headless: true,
-    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
-  });
+    const browser = await chromium.launch({
+      headless: true,
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-zygote',
+        '--single-process',
+      ],
+    });
 
   const page = await browser.newPage();
   await page.setExtraHTTPHeaders({
