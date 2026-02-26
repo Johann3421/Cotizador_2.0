@@ -31,7 +31,7 @@ export async function extractFromImage(file) {
 
   const response = await api.post('/extract', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 120000,
+    timeout: 60000,
   });
   return response.data;
 }
@@ -152,6 +152,26 @@ export function getQuotePDFUrl(id) {
  */
 export async function regeneratePDF(id) {
   const response = await api.post(`/quotes/${id}/regenerate-pdf`);
+  return response.data;
+}
+
+// ============================================
+// ADMIN API — Sincronización del catálogo
+// ============================================
+
+/**
+ * Dispara la sincronización manual del catálogo PeruCompras (background)
+ */
+export async function triggerCatalogSync() {
+  const response = await api.post('/admin/sync');
+  return response.data;
+}
+
+/**
+ * Consulta el estado actual del catálogo en la base de datos
+ */
+export async function getCatalogStatus() {
+  const response = await api.get('/admin/catalog-status');
   return response.data;
 }
 
