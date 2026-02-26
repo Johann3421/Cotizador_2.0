@@ -3,8 +3,8 @@
 const axios    = require('axios');
 const pdfjs    = require('pdfjs-dist');
 
-// Worker para Node.js
-pdfjs.GlobalWorkerOptions.workerSrc = `${require('path').dirname(require.resolve('pdfjs-dist'))}/build/pdf.worker.js`;
+// Worker para Node.js — resolver directamente el archivo worker
+pdfjs.GlobalWorkerOptions.workerSrc = require.resolve('pdfjs-dist/build/pdf.worker.js');
 
 // Cache en memoria — no reprocesar el mismo PDF en la misma sesión
 const _cache = new Map();
