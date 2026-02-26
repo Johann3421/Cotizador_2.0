@@ -1,24 +1,31 @@
 'use strict';
 
-const axios    = require('axios');
-let pdfjsLib;
-try {
-  pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
-} catch (e1) {
+const axios = require('axios');
+
+// Lazy loader for pdfjs-dist — don't crash at module load if the package is
+// missing in the container image. If unavailable, PDF parsing will be skipped
+// and functions will return null instead of throwing during require-time.
+let _pdfjsLib = null;
+const ensurePdfjs = () => {
+  if (_pdfjsLib) return _pdfjsLib;
   try {
-    pdfjsLib = require('pdfjs-dist');
-  } catch (e2) {
+    _pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+  } catch (e1) {
     try {
-      pdfjsLib = require('pdfjs-dist/build/pdf.js');
-    } catch (e3) {
-      console.error('[PdfSpecs] pdfjs-dist not found. Please install pdfjs-dist');
-      throw e3;
+      _pdfjsLib = require('pdfjs-dist');
+    } catch (e2) {
+      try {
+        _pdfjsLib = require('pdfjs-dist/build/pdf.js');
+      } catch (e3) {
+        console.warn('[PdfSpecs] pdfjs-dist not found in runtime. PDF parsing will be disabled.');
+        _pdfjsLib = null;
+      }
     }
   }
-}
 
-// Desactivar worker (no disponible en Node.js)
-if (pdfjsLib && pdfjsLib.GlobalWorkerOptions) pdfjsLib.GlobalWorkerOptions.workerSrc = false;
+  if (_pdfjsLib && _pdfjsLib.GlobalWorkerOptions) _pdfjsLib.GlobalWorkerOptions.workerSrc = false;
+  return _pdfjsLib;
+};
 
 // Cache en memoria — no reprocesar el mismo PDF en la misma sesión
 const _cache = new Map();
@@ -40,10 +47,16 @@ const extraerSpecsDePdf = async (pdfUrl) => {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
     });
 
-    // 2. Cargar con pdfjs-dist
-    const data     = new Uint8Array(resp.data);
+    // 2. Cargar con pdfjs-dist (lazy require)
+    const pdfjsLib = ensurePdfjs();
+    if (!pdfjsLib) {
+      console.warn('[PdfSpecs] pdfjs-dist no está disponible en tiempo de ejecución. Omisión del parseo del PDF.');
+      return null;
+    }
+
+    const data = new Uint8Array(resp.data);
     const loadTask = pdfjsLib.getDocument({ data, verbosity: 0 });
-    const pdf      = await loadTask.promise;
+    const pdf = await loadTask.promise;
 
     // 3. Extraer texto de todas las páginas
     let textoCompleto = '';
