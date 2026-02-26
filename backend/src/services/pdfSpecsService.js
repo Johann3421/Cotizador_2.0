@@ -1,10 +1,24 @@
 'use strict';
 
 const axios    = require('axios');
-const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+let pdfjsLib;
+try {
+  pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+} catch (e1) {
+  try {
+    pdfjsLib = require('pdfjs-dist');
+  } catch (e2) {
+    try {
+      pdfjsLib = require('pdfjs-dist/build/pdf.js');
+    } catch (e3) {
+      console.error('[PdfSpecs] pdfjs-dist not found. Please install pdfjs-dist');
+      throw e3;
+    }
+  }
+}
 
 // Desactivar worker (no disponible en Node.js)
-pdfjsLib.GlobalWorkerOptions.workerSrc = false;
+if (pdfjsLib && pdfjsLib.GlobalWorkerOptions) pdfjsLib.GlobalWorkerOptions.workerSrc = false;
 
 // Cache en memoria — no reprocesar el mismo PDF en la misma sesión
 const _cache = new Map();
