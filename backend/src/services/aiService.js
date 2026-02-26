@@ -70,7 +70,7 @@ async function extractWithOpenAI(base64Image, mimeType) {
 
   const response = await client.chat.completions.create({
     model,
-    max_tokens: 4096,
+    max_completion_tokens: 4096,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {
