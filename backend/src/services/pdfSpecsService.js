@@ -1,10 +1,10 @@
 'use strict';
 
 const axios    = require('axios');
-const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+const pdfjsLib = require('pdfjs-dist');
 
 // Desactivar worker (no disponible en Node.js)
-pdfjsLib.GlobalWorkerOptions.workerSrc = false;
+pdfjsLib.GlobalWorkerOptions.workerSrc = '';
 
 // Cache en memoria — no reprocesar el mismo PDF en la misma sesión
 const _cache = new Map();
