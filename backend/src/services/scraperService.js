@@ -250,6 +250,12 @@ async function searchPeruCompras(searchTerm, marca, retryCount = 0) {
     console.log(`[Scraper] Buscando "${searchTerm}" marca "${marca}" en PeruCompras...`);
     await page.goto(BASE_URL, { waitUntil: 'networkidle', timeout: SCRAPING_TIMEOUT });
     await sleep(1000);
+    try {
+      const initialContent = await page.content();
+      console.log(`[Scraper] Página inicial cargada: ${page.url()} (contenido ${initialContent.length} chars)`);
+    } catch (e) {
+      console.log('[Scraper] No se pudo leer contenido inicial de la página:', e.message);
+    }
 
     // Componer la búsqueda: tipo_equipo + marca
     const fullSearch = marca ? `${searchTerm} ${marca}` : searchTerm;
@@ -270,6 +276,7 @@ async function searchPeruCompras(searchTerm, marca, retryCount = 0) {
     ];
 
     let searchInput = null;
+    let inputSelectorFound = null;
     for (const selector of searchSelectors) {
       try {
         searchInput = await page.$(selector);
@@ -277,6 +284,21 @@ async function searchPeruCompras(searchTerm, marca, retryCount = 0) {
       } catch (e) {
         continue;
       }
+    }
+    if (searchInput) {
+      // determinar cuál selector funcionó
+      for (const selector of searchSelectors) {
+        try {
+          const el = await page.$(selector);
+          if (el) {
+            inputSelectorFound = selector;
+            break;
+          }
+        } catch (e) { }
+      }
+      console.log(`[Scraper] Input de búsqueda detectado con selector: "${inputSelectorFound || 'unknown'}"`);
+    } else {
+      console.log('[Scraper] No se detectó input de búsqueda con los selectores probados.');
     }
 
     const productos = [];
