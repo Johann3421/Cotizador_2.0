@@ -1,7 +1,9 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+# Use `npm install` because `npm ci` requires package-lock.json
+# `npm install` will work when package-lock.json is absent in repo
+RUN npm install
 COPY . .
 RUN npm run build
 
