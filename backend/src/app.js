@@ -128,61 +128,31 @@ async function startServer() {
     await runMigrations();
 
     // Iniciar servidor
-    const { iniciarCronSync, ejecutarSyncManual } = require('./jobs/syncCatalog');
-    const { Pool } = require('pg');
+    app.listen(PORT, '0.0.0.0', async () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`📡 API disponible en http://localhost:${PORT}/api`);
+      console.log(`🤖 AI Provider: ${process.env.AI_PROVIDER || 'openai'} (${process.env.AI_MODEL || 'gpt-4o'})`);
+      console.log(`🌍 Entorno: ${process.env.NODE_ENV || 'development'}`);
 
-    app.listen(PORT, async () => {
-      console.log(`[App] ✅ Servidor iniciado en puerto ${PORT}`);
-
-      // Iniciar cron job diario (2 AM)
+      // Iniciar cron de sync diario (2 AM hora Perú)
       iniciarCronSync();
 
-      // Esperar 3 segundos para que la DB esté lista
-      await new Promise(r => setTimeout(r, 3000));
-
-      try {
-        const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-        const result = await pool.query('SELECT COUNT(*) as total FROM products');
-        const total  = parseInt(result.rows[0]?.total || '0');
-        await pool.end();
-
-        if (total === 0) {
-          console.log('[App] ⚠️  DB vacía — iniciando sync del catálogo PeruCompras...');
-          console.log('[App] ⏳ Esto tarda ~3-5 minutos. El sistema funcionará después.');
-          
-          ejecutarSyncManual((progreso) => {
-            console.log(`[App] 📦 Sync progreso: ${JSON.stringify(progreso)}`);
-          })
-            .then(resumen => {
-              console.log(`[App] ✅ Sync completado: ${resumen.total} fichas guardadas`);
-            })
-            .catch(e => {
-              console.error('[App] ❌ Error en sync inicial:', e.message);
-            });
-        } else {
-          console.log(`[App] ✅ Catálogo listo: ${total} fichas en DB`);
-        }
-      } catch (e) {
-        console.error('[App] Error verificando DB:', e.message);
-        console.log('[App] Reintentando sync en 10 segundos...');
-        setTimeout(() => {
-          ejecutarSyncManual().catch(err => console.error('[App] Reintento fallido:', err.message));
-        }, 10000);
+      // Sync automático si la DB está vacía
+      const countRes = await pool.query('SELECT COUNT(*) FROM products')
+        .catch(() => ({ rows: [{ count: '0' }] }));
+      const totalFichas = parseInt(countRes.rows[0]?.count || '0');
+      if (totalFichas === 0) {
+        console.log('⚠️  Base de datos vacía — iniciando sync inicial del catálogo (~3-5 min)...');
+        ejecutarSyncManual().catch(e => console.error('[App] Error en sync inicial:', e.message));
+      } else {
+        console.log(`✅ Catálogo disponible: ${totalFichas} fichas en DB`);
       }
     });
   } catch (error) {
-    console.error('❌ Error al iniciar el servidor:', error && error.stack ? error.stack : error);
+    console.error('❌ Error al iniciar el servidor:', error.message);
     
     // Si no hay conexión a DB, iniciar sin ella (modo degradado)
-    const isConnError = (err) => {
-      if (!err) return false;
-      if (err.code && String(err.code).toUpperCase().includes('ECONNREFUSED')) return true;
-      if (err.name === 'AggregateError') return true;
-      if (err.message && (err.message.includes('connect') || err.message.includes('ECONNREFUSED'))) return true;
-      return false;
-    };
-
-    if (isConnError(error)) {
+    if (error.message.includes('connect') || error.message.includes('ECONNREFUSED')) {
       console.warn('⚠️  Iniciando en modo degradado (sin base de datos)...');
       app.listen(PORT, '0.0.0.0', () => {
         console.log(`🚀 Server running on port ${PORT} (modo degradado)`);

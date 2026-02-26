@@ -31,7 +31,7 @@ export async function extractFromImage(file) {
 
   const response = await api.post('/extract', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 60000,
+    timeout: 120000,
   });
   return response.data;
 }
