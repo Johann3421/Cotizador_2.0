@@ -141,9 +141,8 @@ async function extractWithOpenAI(base64Image, mimeType) {
   const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
 
   const model = process.env.AI_MODEL || 'gpt-4o';
-  // Mejor manejo de errores y timeout para evitar que la petición cuelgue
-  console.log('[AI] OpenAI request starting for model', model);
-  const aiPromise = client.chat.completions.create({
+
+  const response = await client.chat.completions.create({
     model,
     max_completion_tokens: 4096,
     messages: [
@@ -167,25 +166,6 @@ async function extractWithOpenAI(base64Image, mimeType) {
     ],
   });
 
-  // timeout wrapper (50s)
-  const timeoutMs = 50000;
-  const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('OpenAI request timed out')), timeoutMs));
-
-  let response;
-  try {
-    response = await Promise.race([aiPromise, timeoutPromise]);
-  } catch (err) {
-    console.error('[AI] OpenAI error or timeout:', err.message);
-    // Intentar fallback a Anthropic si está disponible
-    try {
-      console.log('[AI] Intentando fallback a Anthropic...');
-      return await extractWithAnthropic(base64Image, mimeType);
-    } catch (err2) {
-      console.error('[AI] Fallback Anthropic falló:', err2.message);
-      throw new Error(`OpenAI error: ${err.message}; Anthropic fallback: ${err2.message}`);
-    }
-  }
-
   const content = response.choices[0]?.message?.content || '';
   return parseAIResponse(content);
 }
@@ -195,10 +175,7 @@ async function extractWithOpenAI(base64Image, mimeType) {
  */
 async function extractWithAnthropic(base64Image, mimeType) {
   const Anthropic = require('@anthropic-ai/sdk');
-  const anthKey = process.env.ANTHROPIC_API_KEY || process.env.AI_API_KEY;
-  if (!anthKey) throw new Error('Anthropic API key not configured (set ANTHROPIC_API_KEY)');
-  if (!process.env.ANTHROPIC_API_KEY && process.env.AI_API_KEY) console.warn('[AI] Using AI_API_KEY for Anthropic fallback; consider setting ANTHROPIC_API_KEY');
-  const client = new Anthropic({ apiKey: anthKey });
+  const client = new Anthropic({ apiKey: process.env.AI_API_KEY });
 
   const model = process.env.AI_MODEL || 'claude-sonnet-4-5-20241022';
 
