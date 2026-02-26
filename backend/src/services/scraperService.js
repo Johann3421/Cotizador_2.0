@@ -428,7 +428,6 @@ async function searchPeruCompras(searchTerm, marca, retryCount = 0) {
         console.log(`[Scraper] Página cargada (fallback): ${page.url()} - ${pageContent.length} caracteres`);
       }
     }
-    }
 
     return productos;
   } catch (error) {
