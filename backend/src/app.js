@@ -97,11 +97,15 @@ app.use((req, res) => {
 // ============================================
 async function runMigrations() {
   try {
-    const migrationPath = path.join(__dirname, 'db/migrations/001_initial.sql');
-    if (fs.existsSync(migrationPath)) {
-      const sql = fs.readFileSync(migrationPath, 'utf8');
+    const migrationsDir = path.join(__dirname, 'db/migrations');
+    const files = fs.readdirSync(migrationsDir)
+      .filter(f => f.endsWith('.sql'))
+      .sort(); // 001_, 002_, ... orden alfabético
+
+    for (const file of files) {
+      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
       await pool.query(sql);
-      console.log('✅ Migraciones ejecutadas correctamente');
+      console.log(`✅ Migración ejecutada: ${file}`);
     }
   } catch (error) {
     // Las tablas ya podrían existir, eso no es un error

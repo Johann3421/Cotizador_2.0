@@ -1,6 +1,8 @@
-const { searchProducts, forceRefresh, getFichaDetails, MARCAS_PRIORITARIAS } = require('../services/scraperService');
+const { searchCompatibleProducts, searchFichasByMarcaYTipo } = require('../services/scraperService');
 const Requirement = require('../models/Requirement');
 const Product = require('../models/Product');
+
+const MARCAS_SOPORTADAS = ['kenya', 'lenovo', 'hp'];
 
 /**
  * POST /api/search
@@ -19,13 +21,49 @@ async function searchBySpecs(req, res) {
     const resultados = [];
 
     for (const equipo of specs) {
-      const productos = await searchProducts(equipo);
+      const productos = await searchCompatibleProducts(equipo);
 
       resultados.push({
         equipo,
-        productos_kenya: productos.kenya || [],
-        productos_lenovo: productos.lenovo || [],
-        productos_hp: productos.hp || [],
+        productos_kenya: (productos.kenya || []).map(p => ({
+          fichaId:     p.fichaId,
+          nombre:      p.nombre,
+          marca:       'kenya',
+          numeroParte: p.numeroParte,
+          imgUrl:      p.imgUrl,
+          pdfUrl:      p.pdfUrl,
+          specsObj:    p.specsObj,
+          specsFp:     p.specsFp,
+          estado:      p.estado,
+          score:       p.score,
+          urlBuscador: p.urlBuscador,
+        })),
+        productos_lenovo: (productos.lenovo || []).map(p => ({
+          fichaId:     p.fichaId,
+          nombre:      p.nombre,
+          marca:       'lenovo',
+          numeroParte: p.numeroParte,
+          imgUrl:      p.imgUrl,
+          pdfUrl:      p.pdfUrl,
+          specsObj:    p.specsObj,
+          specsFp:     p.specsFp,
+          estado:      p.estado,
+          score:       p.score,
+          urlBuscador: p.urlBuscador,
+        })),
+        productos_hp: (productos.hp || []).map(p => ({
+          fichaId:     p.fichaId,
+          nombre:      p.nombre,
+          marca:       'hp',
+          numeroParte: p.numeroParte,
+          imgUrl:      p.imgUrl,
+          pdfUrl:      p.pdfUrl,
+          specsObj:    p.specsObj,
+          specsFp:     p.specsFp,
+          estado:      p.estado,
+          score:       p.score,
+          urlBuscador: p.urlBuscador,
+        })),
       });
     }
 
@@ -33,7 +71,7 @@ async function searchBySpecs(req, res) {
       success: true,
       requirement_id,
       resultados,
-      marcas_disponibles: MARCAS_PRIORITARIAS,
+      marcas_disponibles: MARCAS_SOPORTADAS,
     });
   } catch (error) {
     console.error('[Search] Error:', error.message);
@@ -56,14 +94,14 @@ async function refreshCatalog(req, res) {
       return res.status(400).json({ error: 'Se requiere el campo "marca"' });
     }
 
-    if (!MARCAS_PRIORITARIAS.includes(marca.toLowerCase())) {
+    if (!MARCAS_SOPORTADAS.includes(marca.toLowerCase())) {
       return res.status(400).json({
-        error: `Marca "${marca}" no soportada. Usa: ${MARCAS_PRIORITARIAS.join(', ')}`,
+        error: `Marca "${marca}" no soportada. Usa: ${MARCAS_SOPORTADAS.join(', ')}`,
       });
     }
 
-    console.log(`[Search] Forzando actualización de catálogo: ${marca} (${tipo_equipo || 'laptop'})...`);
-    const productos = await forceRefresh(marca.toLowerCase(), tipo_equipo || 'laptop');
+    console.log(`[Search] Forzando actualización de catálogo: ${marca} (${tipo_equipo || 'desktop'})...`);
+    const productos = await searchFichasByMarcaYTipo(marca.toLowerCase(), tipo_equipo || 'desktop', 20);
 
     res.json({
       success: true,
@@ -100,17 +138,17 @@ async function getProduct(req, res) {
  */
 async function getFicha(req, res) {
   try {
-    let product = await Product.findByFichaId(req.params.fichaId);
+    const product = await Product.findByFichaId(req.params.fichaId);
 
-    if (product && product.url_ficha) {
-      // Obtener detalles completos
-      const detalles = await getFichaDetails(product.url_ficha);
-      res.json({ ...product, detalles });
-    } else if (product) {
-      res.json(product);
-    } else {
-      res.status(404).json({ error: 'Ficha no encontrada' });
+    if (!product) {
+      return res.status(404).json({ error: 'Ficha no encontrada' });
     }
+
+    // Enrich with pdfUrl from specs JSONB if not in dedicated column
+    const specs = typeof product.specs === 'string' ? JSON.parse(product.specs) : (product.specs || {});
+    const pdfUrl = product.pdf_url || specs.pdfUrl || null;
+
+    res.json({ ...product, pdfUrl });
   } catch (error) {
     console.error('[Search] Error:', error.message);
     res.status(500).json({ error: error.message });
