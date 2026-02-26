@@ -23,7 +23,9 @@ services:
       - kenya_network
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: kenya_backend
     restart: unless-stopped
     ports:
@@ -46,7 +48,9 @@ services:
       - kenya_network
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: kenya_frontend
     restart: unless-stopped
     ports:
