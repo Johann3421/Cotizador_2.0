@@ -1,10 +1,10 @@
 'use strict';
 
 const axios    = require('axios');
-const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+const pdfjs    = require('pdfjs-dist');
 
-// Worker necesario en Node.js
-pdfjsLib.GlobalWorkerOptions.workerSrc = require.resolve('pdfjs-dist/legacy/build/pdf.worker.js');
+// Worker para Node.js
+pdfjs.GlobalWorkerOptions.workerSrc = `${require('path').dirname(require.resolve('pdfjs-dist'))}/build/pdf.worker.js`;
 
 // Cache en memoria — no reprocesar el mismo PDF en la misma sesión
 const _cache = new Map();
@@ -28,7 +28,7 @@ const extraerSpecsDePdf = async (pdfUrl) => {
 
     // 2. Cargar con pdfjs-dist
     const data     = new Uint8Array(resp.data);
-    const loadTask = pdfjsLib.getDocument({ data, verbosity: 0 });
+    const loadTask = pdfjs.getDocument({ data, verbosity: 0 });
     const pdf      = await loadTask.promise;
 
     // 3. Extraer texto de todas las páginas
