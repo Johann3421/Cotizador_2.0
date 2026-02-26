@@ -38,6 +38,9 @@ RUN npm ci --only=production
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
+# Crear enlace por compatibilidad con distribuciones que usan /usr/bin/chromium-browser
+RUN if [ -x "/usr/bin/chromium" ] && [ ! -e "/usr/bin/chromium-browser" ]; then ln -s /usr/bin/chromium /usr/bin/chromium-browser; fi || true
+
 # Copiar el resto del código
 COPY . .
 
