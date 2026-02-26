@@ -8,6 +8,13 @@ const TIPO_ICONS = {
   workstation: Server,
 };
 
+const EsSuperior = ({ esMinimo }) =>
+  esMinimo ? (
+    <span className="ml-1.5 text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium whitespace-nowrap">
+      o superior
+    </span>
+  ) : null;
+
 export default function RequirementCard({ equipo, index, onUpdate, editable = true }) {
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({ ...equipo });
@@ -38,7 +45,7 @@ export default function RequirementCard({ equipo, index, onUpdate, editable = tr
     });
   };
 
-  const SpecRow = ({ label, value, path, type = 'text' }) => {
+  const SpecRow = ({ label, value, path, type = 'text', badge = null }) => {
     if (editing) {
       return (
         <div className="flex items-center gap-2 py-1">
@@ -57,6 +64,7 @@ export default function RequirementCard({ equipo, index, onUpdate, editable = tr
       <div className="flex items-center gap-2 py-0.5">
         <span className="text-xs text-gray-500 w-28 shrink-0">{label}:</span>
         <span className="text-sm font-medium text-gray-800">{value || '—'}</span>
+        {badge}
       </div>
     );
   };
@@ -134,21 +142,21 @@ export default function RequirementCard({ equipo, index, onUpdate, editable = tr
         <div className="border-b border-gray-100 pb-2 mb-2">
           <p className="text-xs font-semibold text-gray-400 uppercase mb-1">Procesador</p>
           <SpecRow label="Marca" value={data.procesador?.marca} path="procesador.marca" />
-          <SpecRow label="Modelo" value={data.procesador?.modelo} path="procesador.modelo" />
+          <SpecRow label="Modelo" value={data.procesador?.modelo} path="procesador.modelo" badge={<EsSuperior esMinimo={data.procesador?.es_minimo} />} />
           <SpecRow label="Generación" value={data.procesador?.generacion} path="procesador.generacion" />
         </div>
 
         {/* Memoria */}
         <div className="border-b border-gray-100 pb-2 mb-2">
           <p className="text-xs font-semibold text-gray-400 uppercase mb-1">Memoria RAM</p>
-          <SpecRow label="Capacidad (GB)" value={data.memoria_ram?.capacidad_gb} path="memoria_ram.capacidad_gb" type="number" />
+          <SpecRow label="Capacidad (GB)" value={data.memoria_ram?.capacidad_gb} path="memoria_ram.capacidad_gb" type="number" badge={<EsSuperior esMinimo={data.memoria_ram?.es_minimo} />} />
           <SpecRow label="Tipo" value={data.memoria_ram?.tipo} path="memoria_ram.tipo" />
         </div>
 
         {/* Almacenamiento */}
         <div className="border-b border-gray-100 pb-2 mb-2">
           <p className="text-xs font-semibold text-gray-400 uppercase mb-1">Almacenamiento</p>
-          <SpecRow label="Capacidad (GB)" value={data.almacenamiento?.capacidad_gb} path="almacenamiento.capacidad_gb" type="number" />
+          <SpecRow label="Capacidad (GB)" value={data.almacenamiento?.capacidad_gb} path="almacenamiento.capacidad_gb" type="number" badge={<EsSuperior esMinimo={data.almacenamiento?.es_minimo} />} />
           <SpecRow label="Tipo" value={data.almacenamiento?.tipo} path="almacenamiento.tipo" />
         </div>
 
