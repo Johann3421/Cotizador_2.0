@@ -1,146 +1,172 @@
 'use strict';
 
 const axios    = require('axios');
-const pdfParse = require('pdf-parse').default || require('pdf-parse');
+const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+
+// Desactivar worker (no disponible en Node.js)
+pdfjsLib.GlobalWorkerOptions.workerSrc = false;
+
+// Cache en memoria — no reprocesar el mismo PDF en la misma sesión
+const _cache = new Map();
 
 /**
- * Descarga y extrae el texto del PDF de especificaciones técnicas de una ficha.
- * El PDF está en la URL almacenada en el campo pdfUrl de la ficha.
- * Ejemplo: https://prod-pc-cdn.azureedge.net/contproveedor/Documentos/Productos/1749737.pdf
+ * Descarga el PDF de PeruCompras y extrae sus especificaciones técnicas.
+ * @param {string} pdfUrl - URL del PDF (prod-pc-cdn.azureedge.net/...)
+ * @returns {object|null} - { specs: { procesador_modelo, ram_gb, ... } }
  */
 const extraerSpecsDePdf = async (pdfUrl) => {
   if (!pdfUrl) return null;
+  if (_cache.has(pdfUrl)) return _cache.get(pdfUrl);
 
   try {
-    const response = await axios.get(pdfUrl, {
+    // 1. Descargar el PDF
+    const resp = await axios.get(pdfUrl, {
       responseType: 'arraybuffer',
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
+      timeout: 12000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
     });
 
-    const data   = await pdfParse(Buffer.from(response.data));
-    const texto  = data.text || '';
-    const specs  = parsearTextoPdf(texto);
+    // 2. Cargar con pdfjs-dist
+    const data     = new Uint8Array(resp.data);
+    const loadTask = pdfjsLib.getDocument({ data, verbosity: 0 });
+    const pdf      = await loadTask.promise;
 
-    return { texto_crudo: texto, specs };
+    // 3. Extraer texto de todas las páginas
+    let textoCompleto = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page    = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const linea   = content.items.map(item => item.str).join(' ');
+      textoCompleto += linea + '\n';
+    }
+
+    // 4. Parsear el texto para extraer specs
+    const specs  = parsearTexto(textoCompleto);
+    const result = { specs, texto_crudo: textoCompleto.substring(0, 500) };
+
+    _cache.set(pdfUrl, result);
+    return result;
 
   } catch (err) {
-    console.error(`[PdfSpecs] Error descargando ${pdfUrl}:`, err.message);
+    console.warn(`[PdfSpecs] Error en ${pdfUrl.split('/').pop()}: ${err.message}`);
     return null;
   }
 };
 
-/**
- * Parsea el texto del PDF y extrae los campos relevantes.
- * El PDF tiene formato: "Campo    Valor" en líneas separadas.
- *
- * Ejemplo de texto real del PDF:
- * "Procesador   Intel® 12° Generación Core I7 12700"
- * "Memoria Ram  8 GB DDR4 3200 400 MHz"
- * "Almacenamiento  512 GB SSD"
- * "Gráficos     Integrado - Intel® UHD Graphics"
- */
-const parsearTextoPdf = (texto) => {
+// ─────────────────────────────────────────────────────────────
+// PARSER DE TEXTO DEL PDF
+// Los PDFs de PeruCompras tienen formato: "Campo   Valor"
+// ─────────────────────────────────────────────────────────────
+const parsearTexto = (texto) => {
   const specs = {};
 
+  // Normalizar espacios múltiples a uno solo
+  const t = texto.replace(/\s{2,}/g, ' ').trim();
+
   // ── Procesador ──────────────────────────────────────────────
-  const procMatch = texto.match(/Procesador[\s\t]+(.+)/i);
-  if (procMatch) {
-    const procTexto = procMatch[1].trim();
-    specs.procesador_texto = procTexto;
+  const proc = t.match(/Procesador\s+([^\n]+)/i);
+  if (proc) {
+    specs.procesador_texto = proc[1].trim();
 
-    // Extraer generación Intel
-    const genMatch = procTexto.match(/(\d{1,2})(?:°|ª|th|rd|nd|st)\s*[Gg]eneración/i)
-                  || procTexto.match(/(\d{4,5})\s*(?:\(|CPU)/);
-    if (genMatch) specs.procesador_generacion = parseInt(genMatch[1]);
+    // Generación Intel (12°, 13th, "12700" → gen 12, "13700" → gen 13)
+    const genNum = proc[1].match(/(\d{1,2})(?:°|ª|th|rd|nd|st)?\s*[Gg]eneración/i);
+    const genMod = proc[1].match(/[Ii]-?(\d{2})\d{3}/); // i7-13700 → gen 13
+    if (genNum)      specs.procesador_generacion = parseInt(genNum[1]);
+    else if (genMod) specs.procesador_generacion = parseInt(genMod[1]);
 
-    // Normalizar modelo
-    const modeloMatch = procTexto.match(/(Core\s+(?:Ultra\s+)?\w+\s*[\w-]+)/i)
-                     || procTexto.match(/(Ryzen\s+\d+\s+[\w-]+)/i);
-    if (modeloMatch) specs.procesador_modelo = modeloMatch[1].trim();
+    // Modelo normalizado
+    const modUltra = proc[1].match(/Core\s+Ultra\s+\d+\s*[\w]*/i);
+    const modCore  = proc[1].match(/Core\s+[iI][3579]-?\s*\d{4,5}\w*/i);
+    const modRyzen = proc[1].match(/Ryzen\s+[3579]\s+\d{4,5}\w*/i);
+    if (modUltra)      specs.procesador_modelo = modUltra[0].trim();
+    else if (modCore)  specs.procesador_modelo = modCore[0].trim();
+    else if (modRyzen) specs.procesador_modelo = modRyzen[0].trim();
   }
 
   // ── RAM ─────────────────────────────────────────────────────
-  const ramMatch = texto.match(/(?:Memoria\s+Ram|RAM|Memoria)[\s\t]+(.+)/i);
-  if (ramMatch) {
-    const ramTexto = ramMatch[1].trim();
-    specs.ram_texto = ramTexto;
-
-    const gbMatch = ramTexto.match(/(\d+)\s*GB/i);
-    if (gbMatch) specs.ram_gb = parseInt(gbMatch[1]);
-
-    const tipoMatch = ramTexto.match(/(DDR[45]|LPDDR[45]X?)/i);
-    if (tipoMatch) specs.ram_tipo = tipoMatch[1].toUpperCase();
-
-    const mhzMatch = ramTexto.match(/(\d{3,4})\s*(?:MHz|mhz)/i);
-    if (mhzMatch) specs.ram_mhz = parseInt(mhzMatch[1]);
+  const ram = t.match(/(?:Memoria\s+Ram|RAM|Memoria)\s+([^\n]+)/i);
+  if (ram) {
+    specs.ram_texto = ram[1].trim();
+    const gb   = ram[1].match(/(\d+)\s*GB/i);
+    const tipo = ram[1].match(/(DDR[45]|LPDDR[45]X?)/i);
+    const mhz  = ram[1].match(/(\d{3,4})\s*(?:MHz|mhz)/i);
+    if (gb)   specs.ram_gb   = parseInt(gb[1]);
+    if (tipo) specs.ram_tipo = tipo[1].toUpperCase();
+    if (mhz)  specs.ram_mhz  = parseInt(mhz[1]);
   }
 
-  // ── Almacenamiento ───────────────────────────────────────────
-  const stMatch = texto.match(/Almacenamiento[\s\t]+(.+)/i);
-  if (stMatch) {
-    const stTexto = stMatch[1].trim();
-    specs.almacenamiento_texto = stTexto;
+  // ── Almacenamiento (puede haber SSD + HDD) ──────────────────
+  const st = t.match(/Almacenamiento\s+([^\n]+)/i);
+  if (st) {
+    specs.almacenamiento_texto = st[1].trim();
     specs.almacenamiento = [];
 
-    // Buscar múltiples unidades
-    const unidades = stTexto.split(/[\/\+\|]|(?:\s+y\s+)/i);
-    for (const u of unidades) {
-      const gbMatch = u.match(/(\d+(?:\.\d+)?)\s*(TB|GB)/i);
-      if (gbMatch) {
-        const val   = parseFloat(gbMatch[1]);
-        const unidad = gbMatch[2].toUpperCase();
-        const gb    = unidad === 'TB' ? val * 1000 : val;
+    const partes = st[1].split(/[\/\+]|\s+y\s+/i);
+    for (const p of partes) {
+      const tb = p.match(/(\d+(?:\.\d+)?)\s*TB/i);
+      const gb = p.match(/(\d+)\s*GB/i);
+      if (!tb && !gb) continue;
 
-        let tipo = 'HDD';
-        if (/nvme|m\.2|pcie/i.test(u))  tipo = 'NVMe SSD';
-        else if (/ssd/i.test(u))         tipo = 'SSD';
-        else if (/7200/i.test(u))        tipo = 'HDD 7200rpm';
+      const capacidad_gb = tb ? parseFloat(tb[1]) * 1000 : parseInt(gb[1]);
+      let tipo = 'HDD';
+      if (/nvme|m\.2|pcie/i.test(p))  tipo = 'NVMe SSD';
+      else if (/ssd/i.test(p))         tipo = 'SSD';
+      else if (/7200\s*rpm/i.test(p))  tipo = 'HDD 7200rpm';
+      else if (/5400\s*rpm/i.test(p))  tipo = 'HDD 5400rpm';
 
-        specs.almacenamiento.push({ gb, tipo });
-      }
+      specs.almacenamiento.push({ gb: capacidad_gb, tipo });
     }
   }
 
-  // ── Gráficos ─────────────────────────────────────────────────
-  const grafMatch = texto.match(/Gr[áa]ficos?[\s\t]+(.+)/i)
-                 || texto.match(/(?:Tarjeta\s+)?[Vv]ideo[\s\t]+(.+)/i);
-  if (grafMatch) {
-    const grafTexto = grafMatch[1].trim();
-    specs.grafica_texto = grafTexto;
+  // ── GRÁFICOS ★ (solo en el PDF, no en el HTML del card) ─────
+  const graf = t.match(/Gr[áa]ficos?\s+([^\n]+)/i)
+             || t.match(/(?:Tarjeta\s+de\s+)?[Vv]ideo\s+([^\n]+)/i);
+  if (graf) {
+    specs.grafica_texto = graf[1].trim();
 
-    if (/integrado|integrada/i.test(grafTexto)) {
-      specs.grafica_tipo    = 'integrada';
-      specs.grafica_modelo  = grafTexto.replace(/integrado\s*[-–]\s*/i, '').trim();
+    if (/integrado|integrada/i.test(graf[1])) {
+      specs.grafica_tipo   = 'integrada';
+      specs.grafica_modelo = graf[1].replace(/integrado[-–\s]*/i, '').trim();
+      console.log(`[PdfSpecs] Gráficos extraídos: ${specs.grafica_texto}`);
     } else {
       specs.grafica_tipo = 'dedicada';
-
-      const vramMatch = grafTexto.match(/(\d+)\s*GB/i);
-      if (vramMatch) specs.grafica_vram_gb = parseInt(vramMatch[1]);
-
-      const modeloMatch = grafTexto.match(/((?:NVIDIA|AMD|Intel)\s+[\w\s]+(?:RTX|GTX|RX|Arc)\s*[\w\s]+)/i)
-                        || grafTexto.match(/((?:RTX|GTX|RX)\s*\d+\w*)/i);
-      if (modeloMatch) specs.grafica_modelo = modeloMatch[1].trim();
+      const vram  = graf[1].match(/(\d+)\s*GB/i);
+      if (vram) specs.grafica_vram_gb = parseInt(vram[1]);
+      const modelo = graf[1].match(/((?:RTX|GTX|RX|Arc)\s*[\w\s]+\d+\w*)/i)
+                  || graf[1].match(/((?:NVIDIA|AMD)\s+[\w\s]+)/i);
+      if (modelo) specs.grafica_modelo = modelo[1].trim();
     }
   }
 
-  // ── SO ───────────────────────────────────────────────────────
-  const soMatch = texto.match(/(?:Sistema\s+Operativo|S\.O\.|SO)[\s\t]+(.+)/i);
-  if (soMatch) specs.so_texto = soMatch[1].trim();
+  // ── Sistema Operativo ────────────────────────────────────────
+  const so = t.match(/(?:Sistema\s+Operativo|S\.O\.)\s+([^\n]+)/i);
+  if (so) specs.so = so[1].trim();
 
   // ── Garantía ─────────────────────────────────────────────────
-  const garMatch = texto.match(/Garantia[\s\t]+(.+)/i);
-  if (garMatch) {
-    specs.garantia_texto = garMatch[1].trim();
-    const mesesMatch = garMatch[1].match(/(\d+)\s*[Mm]eses/);
-    if (mesesMatch) specs.garantia_meses = parseInt(mesesMatch[1]);
+  const gar = t.match(/Garantia\s+([^\n]+)/i);
+  if (gar) {
+    specs.garantia_texto = gar[1].trim();
+    const meses = gar[1].match(/(\d+)\s*[Mm]eses/);
+    if (meses) specs.garantia_meses = parseInt(meses[1]);
   }
 
   // ── Certificaciones ──────────────────────────────────────────
-  const certMatch = texto.match(/Certificaciones?[\s\t]+(.+)/i);
-  if (certMatch) specs.certificaciones_texto = certMatch[1].trim();
+  const cert = t.match(/Certificaciones?\s+([^\n]+)/i);
+  if (cert) {
+    specs.certificaciones_texto = cert[1].trim();
+    specs.certificaciones = cert[1]
+      .split(/[,;]/)
+      .map(c => c.trim())
+      .filter(Boolean);
+  }
+
+  // ── Marca / Modelo / Número de Parte ──────────────────────────
+  const marca  = t.match(/Marca\s+([^\n]+)/i);
+  const modelo = t.match(/Modelo\s+([^\n]+)/i);
+  const parte  = t.match(/Numero\s+de\s+Parte\s+([^\n]+)/i);
+  if (marca)  specs.marca        = marca[1].trim();
+  if (modelo) specs.modelo       = modelo[1].trim();
+  if (parte)  specs.numero_parte = parte[1].trim();
 
   return specs;
 };
