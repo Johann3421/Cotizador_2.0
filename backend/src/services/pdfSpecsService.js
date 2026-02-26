@@ -1,7 +1,7 @@
 'use strict';
 
 const axios    = require('axios');
-const pdfParse = require('pdf-parse');
+const pdfParse = require('pdf-parse').default || require('pdf-parse');
 
 /**
  * Descarga y extrae el texto del PDF de especificaciones técnicas de una ficha.
