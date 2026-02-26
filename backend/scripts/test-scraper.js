@@ -18,9 +18,10 @@ const { searchFichasByMarcaYTipo } = require('../src/services/scraperService');
 
   if (fichas.length === 0) {
     console.log('❌ No se encontraron fichas. Revisar:');
-    console.log('   1. ¿El navegador cargó bien?  → ver /tmp/scraper-debug.png');
-    console.log('   2. ¿Existe <a class="enlace-detalles"> en el DOM?');
-    console.log('   3. ¿El placeholder del input cambió? → revisar INPUT_SELECTORS');
+    console.log('   1. Screenshot de diagnóstico → /tmp/scraper-waiting-kenya.png');
+    console.log('   2. HTML de diagnóstico      → /tmp/scraper-no-input.html');
+    console.log('   3. Aumentar SCRAPER_WAIT_RESULTS en .env (probar 15000)');
+    console.log('   4. Verificar que .enlace-detalles existe en el DOM');
     process.exit(1);
   }
 
