@@ -141,8 +141,9 @@ async function extractWithOpenAI(base64Image, mimeType) {
   const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
 
   const model = process.env.AI_MODEL || 'gpt-4o';
-
-  const response = await client.chat.completions.create({
+  // Mejor manejo de errores y timeout para evitar que la petición cuelgue
+  console.log('[AI] OpenAI request starting for model', model);
+  const aiPromise = client.chat.completions.create({
     model,
     max_completion_tokens: 4096,
     messages: [
@@ -165,6 +166,25 @@ async function extractWithOpenAI(base64Image, mimeType) {
       },
     ],
   });
+
+  // timeout wrapper (50s)
+  const timeoutMs = 50000;
+  const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('OpenAI request timed out')), timeoutMs));
+
+  let response;
+  try {
+    response = await Promise.race([aiPromise, timeoutPromise]);
+  } catch (err) {
+    console.error('[AI] OpenAI error or timeout:', err.message);
+    // Intentar fallback a Anthropic si está disponible
+    try {
+      console.log('[AI] Intentando fallback a Anthropic...');
+      return await extractWithAnthropic(base64Image, mimeType);
+    } catch (err2) {
+      console.error('[AI] Fallback Anthropic falló:', err2.message);
+      throw new Error(`OpenAI error: ${err.message}; Anthropic fallback: ${err2.message}`);
+    }
+  }
 
   const content = response.choices[0]?.message?.content || '';
   return parseAIResponse(content);
