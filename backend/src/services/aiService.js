@@ -195,7 +195,10 @@ async function extractWithOpenAI(base64Image, mimeType) {
  */
 async function extractWithAnthropic(base64Image, mimeType) {
   const Anthropic = require('@anthropic-ai/sdk');
-  const client = new Anthropic({ apiKey: process.env.AI_API_KEY });
+  const anthKey = process.env.ANTHROPIC_API_KEY || process.env.AI_API_KEY;
+  if (!anthKey) throw new Error('Anthropic API key not configured (set ANTHROPIC_API_KEY)');
+  if (!process.env.ANTHROPIC_API_KEY && process.env.AI_API_KEY) console.warn('[AI] Using AI_API_KEY for Anthropic fallback; consider setting ANTHROPIC_API_KEY');
+  const client = new Anthropic({ apiKey: anthKey });
 
   const model = process.env.AI_MODEL || 'claude-sonnet-4-5-20241022';
 
