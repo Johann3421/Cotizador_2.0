@@ -129,23 +129,45 @@ async function startServer() {
 
     // Iniciar servidor
     app.listen(PORT, '0.0.0.0', async () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`📡 API disponible en http://localhost:${PORT}/api`);
-      console.log(`🤖 AI Provider: ${process.env.AI_PROVIDER || 'openai'} (${process.env.AI_MODEL || 'gpt-4o'})`);
-      console.log(`🌍 Entorno: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`[App] ✅ Servidor iniciado en puerto ${PORT}`);
+      console.log(`[App] 📡 API disponible en http://localhost:${PORT}/api`);
+      console.log(`[App] 🤖 AI Provider: ${process.env.AI_PROVIDER || 'openai'} (${process.env.AI_MODEL || 'gpt-4o'})`);
+      console.log(`[App] 🌍 Entorno: ${process.env.NODE_ENV || 'development'}`);
 
-      // Iniciar cron de sync diario (2 AM hora Perú)
+      // Iniciar cron job diario (2 AM)
       iniciarCronSync();
 
-      // Sync automático si la DB está vacía
-      const countRes = await pool.query('SELECT COUNT(*) FROM products')
-        .catch(() => ({ rows: [{ count: '0' }] }));
-      const totalFichas = parseInt(countRes.rows[0]?.count || '0');
-      if (totalFichas === 0) {
-        console.log('⚠️  Base de datos vacía — iniciando sync inicial del catálogo (~3-5 min)...');
-        ejecutarSyncManual().catch(e => console.error('[App] Error en sync inicial:', e.message));
-      } else {
-        console.log(`✅ Catálogo disponible: ${totalFichas} fichas en DB`);
+      // Esperar 3 segundos para que la DB esté completamente lista
+      await new Promise(r => setTimeout(r, 3000));
+
+      try {
+        const { Pool: PgPool } = require('pg');
+        const checkPool = new PgPool({ connectionString: process.env.DATABASE_URL });
+        const result = await checkPool.query('SELECT COUNT(*) as total FROM products');
+        const total  = parseInt(result.rows[0]?.total || '0');
+        await checkPool.end();
+
+        if (total === 0) {
+          console.log('[App] ⚠️  DB vacía — iniciando sync del catálogo PeruCompras...');
+          console.log('[App] ⏳ Esto tarda ~3-5 minutos. El sistema funcionará después.');
+          ejecutarSyncManual((progreso) => {
+            console.log(`[App] 📦 Sync progreso: ${JSON.stringify(progreso)}`);
+          })
+            .then(resumen => {
+              console.log(`[App] ✅ Sync completado: ${resumen?.total ?? '?'} fichas guardadas`);
+            })
+            .catch(e => {
+              console.error('[App] ❌ Error en sync inicial:', e.message);
+            });
+        } else {
+          console.log(`[App] ✅ Catálogo listo: ${total} fichas en DB`);
+        }
+      } catch (e) {
+        console.error('[App] Error verificando DB:', e.message);
+        console.log('[App] Reintentando sync en 10 segundos...');
+        setTimeout(() => {
+          ejecutarSyncManual().catch(err => console.error('[App] Reintento fallido:', err.message));
+        }, 10000);
       }
     });
   } catch (error) {
