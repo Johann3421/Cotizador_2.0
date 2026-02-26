@@ -4,6 +4,9 @@ const upload = require('../middleware/upload');
 const extractController = require('../controllers/extractController');
 const searchController = require('../controllers/searchController');
 const quoteController = require('../controllers/quoteController');
+const { ejecutarSyncManual, isSyncEnProgreso } = require('../jobs/syncCatalog');
+const { Pool } = require('pg');
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // ============================================
 // EXTRACTION ROUTES (AI Vision)
@@ -58,6 +61,48 @@ router.get('/quotes/:id/pdf', quoteController.downloadPDF);
 
 // POST /api/quotes/:id/regenerate-pdf - Regenerar PDF
 router.post('/quotes/:id/regenerate-pdf', quoteController.regeneratePDF);
+
+// ============================================
+// ADMIN — Sincronización del catálogo
+// ============================================
+
+// GET /api/admin/catalog-status — Estado del catálogo en DB
+router.get('/admin/catalog-status', async (req, res) => {
+  try {
+    const stats = await pool.query(`
+      SELECT
+        marca,
+        categoria,
+        COUNT(*) as total,
+        MAX(ultima_actualizacion) as ultima_actualizacion
+      FROM products
+      GROUP BY marca, categoria
+      ORDER BY marca, categoria
+    `);
+    const lastSync = await pool.query(
+      'SELECT * FROM catalog_sync_log ORDER BY sync_date DESC LIMIT 1'
+    ).catch(() => ({ rows: [] }));
+    res.json({
+      enProgreso:     isSyncEnProgreso(),
+      ultimoSync:     lastSync.rows[0] || null,
+      fichasPorMarca: stats.rows,
+      totalFichas:    stats.rows.reduce((sum, r) => sum + parseInt(r.total), 0),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/admin/sync — Dispara sync manual en background
+router.post('/admin/sync', async (req, res) => {
+  if (isSyncEnProgreso()) {
+    return res.status(409).json({ error: 'Sync ya en progreso' });
+  }
+  res.json({ message: 'Sync iniciado en background. Ver GET /api/admin/catalog-status para el progreso.' });
+  ejecutarSyncManual((progreso) => {
+    console.log('[Sync] Progreso:', JSON.stringify(progreso));
+  }).catch(e => console.error('[Sync] Error:', e.message));
+});
 
 // ============================================
 // HEALTH CHECK

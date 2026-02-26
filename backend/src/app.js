@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const apiRoutes = require('./routes/api');
 const { pool } = require('./db/connection');
+const { iniciarCronSync, ejecutarSyncManual } = require('./jobs/syncCatalog');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -127,11 +128,25 @@ async function startServer() {
     await runMigrations();
 
     // Iniciar servidor
-    app.listen(PORT, '0.0.0.0', () => {
+    app.listen(PORT, '0.0.0.0', async () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📡 API disponible en http://localhost:${PORT}/api`);
       console.log(`🤖 AI Provider: ${process.env.AI_PROVIDER || 'openai'} (${process.env.AI_MODEL || 'gpt-4o'})`);
       console.log(`🌍 Entorno: ${process.env.NODE_ENV || 'development'}`);
+
+      // Iniciar cron de sync diario (2 AM hora Perú)
+      iniciarCronSync();
+
+      // Sync automático si la DB está vacía
+      const countRes = await pool.query('SELECT COUNT(*) FROM products')
+        .catch(() => ({ rows: [{ count: '0' }] }));
+      const totalFichas = parseInt(countRes.rows[0]?.count || '0');
+      if (totalFichas === 0) {
+        console.log('⚠️  Base de datos vacía — iniciando sync inicial del catálogo (~3-5 min)...');
+        ejecutarSyncManual().catch(e => console.error('[App] Error en sync inicial:', e.message));
+      } else {
+        console.log(`✅ Catálogo disponible: ${totalFichas} fichas en DB`);
+      }
     });
   } catch (error) {
     console.error('❌ Error al iniciar el servidor:', error.message);

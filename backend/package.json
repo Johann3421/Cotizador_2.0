@@ -9,6 +9,7 @@
     "migrate": "node src/db/migrate.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
     "axios": "^1.7.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
@@ -16,8 +17,8 @@
     "helmet": "^7.1.0",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
+    "node-cron": "^4.2.1",
     "openai": "^4.52.0",
-    "@anthropic-ai/sdk": "^0.24.0",
     "pdf-lib": "^1.17.1",
     "pdfkit": "^0.15.0",
     "pg": "^8.12.0",
