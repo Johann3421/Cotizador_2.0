@@ -251,6 +251,9 @@ async function searchPeruCompras(searchTerm, marca, retryCount = 0) {
     await page.goto(BASE_URL, { waitUntil: 'networkidle', timeout: SCRAPING_TIMEOUT });
     await sleep(1000);
 
+    // Componer la búsqueda: tipo_equipo + marca
+    const fullSearch = marca ? `${searchTerm} ${marca}` : searchTerm;
+
     // Buscar el campo de búsqueda e ingresar el término
     // Intentamos varios selectores comunes para el buscador
     const searchSelectors = [
@@ -279,8 +282,6 @@ async function searchPeruCompras(searchTerm, marca, retryCount = 0) {
     const productos = [];
 
     if (searchInput) {
-      // Componer la búsqueda: tipo_equipo + marca
-      const fullSearch = marca ? `${searchTerm} ${marca}` : searchTerm;
       await searchInput.fill(fullSearch);
       await sleep(500);
 
@@ -359,11 +360,74 @@ async function searchPeruCompras(searchTerm, marca, retryCount = 0) {
         }
       }
     } else {
-      console.log('[Scraper] No se encontró campo de búsqueda en PeruCompras. Intentando scraping de la página completa...');
-      
-      // Como fallback, intentar extraer todo el contenido de la página
-      const pageContent = await page.content();
-      console.log(`[Scraper] Página cargada: ${pageContent.length} caracteres`);
+      console.log('[Scraper] No se encontró campo de búsqueda en PeruCompras. Probando endpoints de búsqueda directos...');
+
+      // Intentar endpoints directos comunes del buscador con el término construído
+      const searchPaths = [
+        `/buscar?texto=${encodeURIComponent(fullSearch)}`,
+        `/buscar?q=${encodeURIComponent(fullSearch)}`,
+        `/busqueda?q=${encodeURIComponent(fullSearch)}`,
+        `/search?q=${encodeURIComponent(fullSearch)}`,
+        `/resultados?texto=${encodeURIComponent(fullSearch)}`,
+      ];
+
+      for (const p of searchPaths) {
+        try {
+          const url = new URL(p, BASE_URL).href;
+          console.log(`[Scraper] Intentando búsqueda directa en: ${url}`);
+          await page.goto(url, { waitUntil: 'networkidle', timeout: SCRAPING_TIMEOUT });
+          await sleep(1000);
+
+          // Reintentar extracción de resultados con los mismos selectores
+          for (const selector of ['.product-card','.card','.resultado-item','.item-catalogo','table tbody tr','.list-group-item','[class*="product"]','[class*="ficha"]','[class*="catalog"]']) {
+            const items = await page.$$(selector);
+            if (items && items.length > 0) {
+              console.log(`[Scraper] Encontrados ${items.length} resultados en búsqueda directa con selector "${selector}"`);
+              // procesar items como si hubiéramos usado el flow principal
+              for (let i = 0; i < Math.min(items.length, 10); i++) {
+                try {
+                  const item = items[i];
+                  const text = await item.innerText();
+                  const linkEl = await item.$('a[href]');
+                  const link = linkEl ? await linkEl.getAttribute('href') : '';
+                  const fullUrl = link ? new URL(link, BASE_URL).href : '';
+                  const titleEl = await item.$('h3, h4, h5, .title, .nombre, strong, b');
+                  const title = titleEl ? await titleEl.innerText() : text.substring(0, 100);
+                  const priceMatch = text.match(/S\/\.?\s*([\d,.]+)/);
+                  const precio = priceMatch ? parseFloat(priceMatch[1].replace(',', '')) : null;
+                  const fichaIdMatch = link?.match(/[?&]id=(\d+)/) || link?.match(/\/(\d+)$/);
+                  const fichaId = fichaIdMatch ? fichaIdMatch[1] : `PC-${Date.now()}-${i}`;
+
+                  productos.push({
+                    ficha_id: fichaId,
+                    marca: marca || detectarMarca(text),
+                    nombre: title.trim(),
+                    specs_raw: text,
+                    precio_referencial: precio,
+                    url_ficha: fullUrl,
+                  });
+                  await sleep(200);
+                } catch (itemErr) {
+                  console.error(`[Scraper] Error procesando item directo ${i}:`, itemErr.message);
+                }
+              }
+              // si encontramos resultados, rompemos los intentos de path
+              break;
+            }
+          }
+          // si ya se llenaron productos, salir del loop de paths
+          if (productos.length > 0) break;
+        } catch (e) {
+          console.log(`[Scraper] Falla en endpoint directo ${p}: ${e.message}`);
+          continue;
+        }
+      }
+
+      if (productos.length === 0) {
+        const pageContent = await page.content();
+        console.log(`[Scraper] Página cargada (fallback): ${page.url()} - ${pageContent.length} caracteres`);
+      }
+    }
     }
 
     return productos;
