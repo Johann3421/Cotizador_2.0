@@ -2,85 +2,111 @@ const fs = require('fs');
 const path = require('path');
 
 const SYSTEM_PROMPT = `
-Eres un experto en hardware de computadoras para licitaciones y adquisiciones del Estado Peruano.
-Analiza el documento proporcionado y extrae ÚNICAMENTE los requerimientos técnicos de equipos de cómputo.
+Eres un experto en hardware de computadoras y licitaciones públicas de Perú (PeruCompras).
+Tu trabajo es extraer especificaciones técnicas de equipos de cómputo desde imágenes o PDFs de bases de licitación.
 
-REGLAS DE EXTRACCIÓN:
-- Extrae solo especificaciones técnicas relevantes para cotizar PCs, laptops o all-in-one
-- Ignora información de precios, nombres de personas, fechas, firmas y cláusulas legales
-- Si hay varios equipos en el mismo requerimiento, extrae cada uno como un objeto separado
-- Si una especificación no está clara, pon null; NO inventes datos
-- Detecta correctamente el tipo: laptop, desktop, all-in-one, workstation
-- Cuando el documento diga "mínimo", "como mínimo", "o superior", "no menor a" o "no inferior a",
-  establece es_minimo: true en ese componente; si no lo dice, es_minimo: false
-- Para procesador: si el documento lista varios modelos equivalentes separados por "/" o "o",
-  colócalos todos en el campo "modelo" separados por " / "
-- Normaliza unidades: "16 RAM" → capacidad_gb: 16, "1 TB SSD" → capacidad_gb: 1000, tipo: "SSD"
-- garantia_min y garantia_max van en MESES (24 meses = 24, 2 años = 24)
+════════════════════════════════════════════════════════
+REGLAS DE EXTRACCIÓN — LEER ANTES DE PROCESAR
+════════════════════════════════════════════════════════
 
-FORMATO DE RESPUESTA (JSON puro, sin markdown, sin bloques \`\`\`):
+PROCESADORES:
+- Si hay DOS modelos aceptados (ej: "Core Ultra 5 225A O Core i7-13700"), extráelos como array en modelos_aceptados
+- El modelo_principal siempre debe ser el de MAYOR generación/rendimiento
+- Jerarquía Intel: Core Ultra Serie 2 > Core Ultra Serie 1 > Core i9 > Core i7 > Core i5 > Core i3
+- Jerarquía AMD: Ryzen 9 > Ryzen 7 > Ryzen 5 > Ryzen 3
+- Extraer siempre el número de modelo completo (ej: "i7-13700" no solo "i7")
+- Si dice "O SUPERIOR" → es_minimo: true
+
+MEMORIA RAM:
+- DDR5 es SIEMPRE superior a DDR4
+- Extraer capacidad en GB (número entero), tipo (DDR4/DDR5/LPDDR5), frecuencia_mhz si aparece
+- Si dice "8GB O SUPERIOR" → capacidad_gb: 8, es_minimo: true
+
+ALMACENAMIENTO — PUEDE HABER DOS UNIDADES:
+- Si hay SSD + HDD, extraer ambas como array
+- Tipos válidos: "NVMe SSD", "SSD", "HDD", "HDD 7200rpm", "HDD 5400rpm", "eMMC"
+- 1TB = 1000GB para cálculos de comparación
+
+TARJETA GRÁFICA:
+- "TARJETA DE VIDEO: OPCIONAL" → tipo: "integrada", opcional_dedicada: true
+- Sin mención de GPU → tipo: "integrada", opcional_dedicada: false
+- NUNCA poner tipo: "dedicada" si el documento no especifica modelo o VRAM de GPU dedicada
+
+MONITOR/PANTALLA:
+- IGNORAR completamente si el equipo es un DESKTOP. Los monitores son categoría separada.
+- Solo extraer pantalla si el tipo de equipo es laptop o all-in-one.
+
+CATEGORÍAS DE EQUIPO:
+- "CPU", "UNIDAD CENTRAL DE PROCESO", "COMPUTADORA DE ESCRITORIO" → tipo_equipo: "desktop"
+- "LAPTOP", "COMPUTADORA PORTÁTIL", "NOTEBOOK" → tipo_equipo: "laptop"
+- "ALL IN ONE", "AIO" → tipo_equipo: "all-in-one"
+- "WORKSTATION", "ESTACIÓN DE TRABAJO" → tipo_equipo: "workstation"
+
+CONECTIVIDAD — Valores posibles:
+- true  = el documento dice "SI" o lo incluye como requerido
+- false = el documento dice "NO"
+- null  = el documento dice "OPCIONAL" o no lo menciona
+
+════════════════════════════════════════════════════════
+FORMATO DE RESPUESTA — JSON PURO SIN MARKDOWN
+════════════════════════════════════════════════════════
+
 {
   "equipos": [
     {
-      "tipo_equipo": "laptop|desktop|all-in-one|workstation",
-      "cantidad": 1,
+      "tipo_equipo": "desktop",
+      "cantidad": 3,
       "procesador": {
-        "marca": "",
-        "modelo": "",
-        "generacion": "",
-        "nucleos": null,
-        "frecuencia": null,
-        "es_minimo": false
+        "marca": "Intel",
+        "modelos_aceptados": ["Core Ultra 5 225A", "Core i7-13700"],
+        "modelo_principal": "Core Ultra 5 225A",
+        "generacion_principal": "Series 2 (Lunar Lake)",
+        "es_minimo": true
       },
       "memoria_ram": {
-        "capacidad_gb": null,
-        "tipo": "",
+        "capacidad_gb": 8,
+        "tipo": "DDR4",
         "frecuencia_mhz": null,
-        "es_minimo": false
+        "es_minimo": true
       },
-      "almacenamiento": {
-        "capacidad_gb": null,
-        "tipo": "",
-        "es_minimo": false
-      },
-      "pantalla": {
-        "pulgadas": null,
-        "resolucion": "",
-        "tipo": "",
-        "es_minimo": false
-      },
+      "almacenamiento": [
+        { "capacidad_gb": 512, "tipo": "SSD", "es_minimo": true }
+      ],
       "grafica": {
-        "tipo": "integrada|dedicada",
+        "tipo": "integrada",
         "vram_gb": null,
-        "modelo": ""
+        "modelo": null,
+        "opcional_dedicada": true
       },
+      "pantalla": null,
+      "sistema_operativo": "Windows 11",
+      "sistema_operativo_bits": 64,
+      "sistema_operativo_idioma": "Español",
       "conectividad": {
-        "lan": null,
+        "lan": true,
         "wlan": null,
-        "bluetooth": null,
-        "hdmi": null,
+        "hdmi": true,
         "vga": null,
-        "usb_cantidad": null,
-        "usb_tipo": ""
+        "displayport": null,
+        "usb": true
       },
       "perifericos": {
-        "teclado": false,
-        "mouse": false,
-        "camara_web": false,
-        "auriculares": false
+        "teclado": true,
+        "mouse": true,
+        "unidad_optica": null,
+        "combo_audio_mic": true
       },
-      "sistema_operativo": "",
-      "garantia_min": null,
-      "garantia_max": null,
-      "catalogo_electronico": false,
-      "certificaciones": [],
-      "otros": [],
-      "uso": ""
+      "suite_ofimatica": null,
+      "suite_ofimatica_opcional": true,
+      "certificaciones": ["ENERGY STAR", "EPEAT", "MIL-STD 810H", "RoHS", "ISO 14001", "ISO 9001"],
+      "garantia_min_meses": 24,
+      "garantia_max_meses": 36,
+      "catalogo_electronico": true,
+      "uso": "ofimática/escritorio",
+      "notas": ""
     }
-  ],
-  "notas_adicionales": ""
-}
-`;
+  ]
+}`;
 
 /**
  * Lee una imagen y la convierte a base64

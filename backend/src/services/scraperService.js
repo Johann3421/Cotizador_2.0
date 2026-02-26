@@ -1,7 +1,8 @@
 "use strict";
 
-const { chromium } = require('playwright');
-const { Pool }     = require('pg');
+const { chromium }         = require('playwright');
+const { Pool }             = require('pg');
+const { extraerSpecsDePdf } = require('./pdfSpecsService');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -14,6 +15,23 @@ const TERMINOS = {
 };
 
 // ─────────────────────────────────────────────────────────────
+// CARGA DE SPECS DE PDFs EN LOTES (3 a la vez)
+// ─────────────────────────────────────────────────────────────
+const cargarPdfSpecs = async (fichas) => {
+  const BATCH = 3;
+  for (let i = 0; i < fichas.length; i += BATCH) {
+    const batch = fichas.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (f) => {
+      if (f.pdfUrl && !f.pdfSpecs) {
+        f.pdfSpecs = await extraerSpecsDePdf(f.pdfUrl);
+      }
+    }));
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return fichas;
+};
+
+// ─────────────────────────────────────────────────────────────
 // FUNCIÓN PRINCIPAL — Busca en DB, si no hay datos hace scraping
 // ─────────────────────────────────────────────────────────────
 const searchCompatibleProducts = async (specs) => {
@@ -22,8 +40,8 @@ const searchCompatibleProducts = async (specs) => {
   const result = {};
 
   for (const marca of MARCAS) {
-    // 1. Intentar desde DB
-    let fichas = await buscarEnDB(marca, tipo, 10);
+    // 1. Intentar desde DB (traer 15 para filtrar después)
+    let fichas = await buscarEnDB(marca, tipo, 15);
 
     // 2. Si no hay en DB → scrapear ahora mismo
     if (fichas.length === 0) {
@@ -35,11 +53,18 @@ const searchCompatibleProducts = async (specs) => {
       }
     }
 
-    result[marca] = fichas
-      .map(f => ({ ...f, score: calcularScore(f, specs) }))
-      .sort((a, b) => b.score - a.score);
+    // 3. Cargar specs del PDF para comparación precisa
+    fichas = await cargarPdfSpecs(fichas);
 
-    console.log(`[Scraper] ${marca}: ${result[marca].length} fichas (score top: ${result[marca][0]?.score ?? 0})`);
+    // 4. Calcular scores y filtrar solo iguales o superiores (score >= 60)
+    const conScore = fichas
+      .map(f => ({ ...f, score: calcularScore(f, specs) }))
+      .filter(f => f.score >= 60)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10);
+
+    result[marca] = conScore;
+    console.log(`[Scraper] ${marca}: ${conScore.length} fichas compatibles (de ${fichas.length} totales, top score: ${conScore[0]?.score ?? 0})`);
   }
 
   return result;
@@ -277,59 +302,146 @@ const guardarEnDB = async (fichas, marca, tipo) => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// SCORE DE COMPATIBILIDAD
+// SCORE DE COMPATIBILIDAD (usa specs del PDF si están disponibles)
+// Solo retorna fichas con score >= 60 (iguales o superiores al req)
 // ─────────────────────────────────────────────────────────────
 const calcularScore = (ficha, req) => {
+  const hayHtml = ((ficha.specsFp || '') + ' ' + JSON.stringify(ficha.specsObj || {})).toLowerCase();
+  const pdf     = ficha.pdfSpecs?.specs || {};
+
   let score = 0;
-  const hay = ((ficha.specsFp || '') + ' ' + JSON.stringify(ficha.specsObj || {})).toLowerCase();
 
-  // Procesador (30 pts)
-  const modelos = (req.procesador?.modelo || '').split(/[\\/]|\\bO\\b/i).map(m => m.trim().toLowerCase()).filter(Boolean);
-  let ps = 0;
-  for (const m of modelos) {
-    if (hay.includes(m)) { ps = 30; break; }
-    if (m.includes('ultra') && hay.includes('ultra')) ps = Math.max(ps, 22);
-    else if (m.includes('i7') && hay.includes('i7'))  ps = Math.max(ps, 20);
-    else if (m.includes('i5') && hay.includes('i5'))  ps = Math.max(ps, 12);
+  // ══════════════════════════════════════════
+  // PROCESADOR (30 puntos)
+  // ══════════════════════════════════════════
+  const modelos = (
+    req.procesador?.modelos_aceptados ||
+    [req.procesador?.modelo_principal, req.procesador?.modelo].filter(Boolean)
+  ).map(m => (m || '').trim().toLowerCase()).filter(Boolean);
+
+  let procScore = 0;
+  for (const mod of modelos) {
+    if (hayHtml.includes(mod) || (pdf.procesador_modelo || '').toLowerCase().includes(mod)) {
+      procScore = 30; break;
+    }
+    // Match por familia (ultra 5, i7-13xxx, etc.)
+    const familia = mod.match(/(ultra \d+|i[357]-?\d{4,5}|i[357] \d{4,5}|ryzen [579] \d{4})/)?.[0];
+    if (familia) {
+      if (hayHtml.includes(familia) || (pdf.procesador_modelo || '').toLowerCase().includes(familia)) {
+        procScore = Math.max(procScore, 25);
+      }
+    }
+    // Match por generación numérica
+    const genReq  = parseInt(mod.match(/(\d{2})\d{3}/)?.[1] || mod.match(/(?:ultra|series)\s*(\d)/i)?.[1] || '0');
+    const genFicha = pdf.procesador_generacion || 0;
+    if (genFicha >= genReq && genFicha > 0 && genReq > 0) procScore = Math.max(procScore, 28);
+    // Fuzzy: ultra, i7, i5
+    if (procScore === 0) {
+      if (mod.includes('ultra') && hayHtml.includes('ultra'))  procScore = Math.max(procScore, 22);
+      else if (mod.includes('i7') && hayHtml.includes('i7'))   procScore = Math.max(procScore, 20);
+      else if (mod.includes('i5') && hayHtml.includes('i5'))   procScore = Math.max(procScore, 12);
+    }
   }
-  score += ps;
+  score += procScore;
 
-  // RAM (25 pts)
-  const ramReq = req.memoria_ram?.capacidad_gb || 0;
-  if (ramReq) {
-    const ramFicha = gbDesdeTexto(hay.match(/(\\d+)\\s*gb\\s*(ddr|ram)/i)?.[0] || '');
-    if (ramFicha >= ramReq) score += 25;
-    else if (ramFicha > 0) score += Math.round((ramFicha / ramReq) * 15);
+  // ══════════════════════════════════════════
+  // RAM (25 puntos)
+  // ══════════════════════════════════════════
+  const ramReq   = req.memoria_ram?.capacidad_gb || 0;
+  const tipoReq  = (req.memoria_ram?.tipo || '').toUpperCase();
+  if (ramReq > 0) {
+    const ramFichaGb = pdf.ram_gb || gbDesdeTexto(hayHtml.match(/(\d+)\s*gb\s*(ddr|ram)/i)?.[0] || '');
+    const tipoFicha  = (pdf.ram_tipo || hayHtml.match(/(ddr[45]|lpddr[45]x?)/i)?.[1] || '').toUpperCase();
+
+    if (ramFichaGb >= ramReq) score += 20;
+    else if (ramFichaGb > 0) score += Math.round((ramFichaGb / ramReq) * 12);
+
+    if (tipoFicha && tipoReq) {
+      const tipoPts = tipoFicha === tipoReq ? 5
+                    : (tipoFicha === 'DDR5' && tipoReq === 'DDR4') ? 5
+                    : (tipoFicha === 'DDR4' && tipoReq === 'DDR5') ? -5
+                    : 0;
+      score += tipoPts;
+    }
+  } else {
+    score += 25; // Sin requisito de RAM → no penalizar
   }
 
-  // Almacenamiento (20 pts)
-  const stReq = req.almacenamiento?.capacidad_gb || 0;
-  if (stReq) {
-    const stFicha = hay.includes('1 tb') || hay.includes('1tb') ? 1000
-                  : gbDesdeTexto(hay.match(/(\\d+)\\s*gb\\s*ssd/i)?.[0] || '');
-    if (stFicha >= stReq) score += 20;
-    else if (stFicha > 0) score += Math.round((stFicha / stReq) * 12);
+  // ══════════════════════════════════════════
+  // ALMACENAMIENTO (20 puntos)
+  // ══════════════════════════════════════════
+  const stReqs  = Array.isArray(req.almacenamiento) ? req.almacenamiento : [req.almacenamiento].filter(Boolean);
+  const stFicha = pdf.almacenamiento?.length > 0
+    ? pdf.almacenamiento
+    : [{
+        gb:   hayHtml.includes('1 tb') || hayHtml.includes('1tb') ? 1000 : gbDesdeTexto(hayHtml.match(/(\d+)\s*gb\s*ssd/i)?.[0] || ''),
+        tipo: /nvme|m\.2/.test(hayHtml) ? 'NVMe SSD' : /ssd/.test(hayHtml) ? 'SSD' : 'HDD',
+      }];
+
+  let stScore = 0;
+  for (const req_st of stReqs) {
+    if (!req_st?.capacidad_gb) continue;
+    const cubre = stFicha.some(f => f.gb >= req_st.capacidad_gb && !(req_st.tipo === 'SSD' && f.tipo === 'HDD'));
+    if (cubre) {
+      stScore += Math.round(20 / stReqs.length);
+    } else {
+      const mejor = stFicha.reduce((mx, f) => f.gb > mx ? f.gb : mx, 0);
+      if (mejor > 0) stScore += Math.round((mejor / req_st.capacidad_gb) * (10 / stReqs.length));
+    }
+  }
+  score += Math.min(stScore, 20);
+
+  // ══════════════════════════════════════════
+  // GRÁFICA (10 puntos)
+  // ══════════════════════════════════════════
+  const grafReq   = req.grafica?.tipo;
+  const grafFicha = pdf.grafica_tipo || (hayHtml.includes('integrad') ? 'integrada' : null);
+
+  if (!grafReq || grafReq === 'integrada' || req.grafica?.opcional_dedicada) {
+    score += 10;
+  } else if (grafReq === 'dedicada' && grafFicha === 'dedicada') {
+    const vramReq   = req.grafica?.vram_gb || 0;
+    const vramFicha = pdf.grafica_vram_gb  || gbDesdeTexto(hayHtml.match(/(\d+)\s*gb\s*(gddr|vram)/i)?.[0] || '');
+    score += vramFicha >= vramReq ? 10 : 5;
   }
 
-  // SO (10 pts)
-  if ((req.sistema_operativo || '').toLowerCase().includes('windows') && hay.includes('windows')) score += 10;
+  // ══════════════════════════════════════════
+  // SISTEMA OPERATIVO (10 puntos)
+  // ══════════════════════════════════════════
+  const soReq   = (req.sistema_operativo || '').toLowerCase();
+  const soFicha = (pdf.so_texto || hayHtml).toLowerCase();
+  if (soReq.includes('windows') && soFicha.includes('windows')) {
+    score += 7;
+    if      (soReq.includes('11') && soFicha.includes('11')) score += 3;
+    else if (soReq.includes('10') && soFicha.includes('10')) score += 2;
+  }
 
-  // Conectividad (10 pts)
-  if (hay.includes('lan: si'))  score += 4;
-  if (hay.includes('hdmi: si')) score += 3;
-  if (hay.includes('usb: si'))  score += 3;
+  // ══════════════════════════════════════════
+  // CONECTIVIDAD (5 puntos)
+  // ══════════════════════════════════════════
+  const conn = req.conectividad || {};
+  if (conn.lan  === true && hayHtml.includes('lan: si'))  score += 2;
+  if (conn.hdmi === true && hayHtml.includes('hdmi: si')) score += 2;
+  if (conn.usb  === true && hayHtml.includes('usb: si'))  score += 1;
 
-  // Ofertada bonus (5 pts)
-  if ((ficha.estado || '').toLowerCase() === 'ofertada') score += 5;
+  // ══════════════════════════════════════════
+  // GARANTÍA (5 puntos bonus)
+  // ══════════════════════════════════════════
+  const garMin   = req.garantia_min_meses || 0;
+  const garFicha = pdf.garantia_meses     || 0;
+  if (garFicha >= garMin && garMin > 0) score += 5;
 
-  return Math.min(score, 100);
+  // Ofertada bonus
+  if ((ficha.estado || '').toLowerCase() === 'ofertada') score += 3;
+
+  return Math.min(Math.round(score), 100);
 };
 
 const gbDesdeTexto = (t) => {
   if (!t) return 0;
-  const tb = t.match(/(\\d+)\\s*tb/i);
-  if (tb) return parseInt(tb[1]) * 1000;
-  const gb = t.match(/(\\d+)\\s*gb/i);
+  const tb = (t + '').match(/(\d+(?:\.\d+)?)\s*tb/i);
+  if (tb) return parseFloat(tb[1]) * 1000;
+  const gb = (t + '').match(/(\d+)\s*gb/i);
   return gb ? parseInt(gb[1]) : 0;
 };
 
