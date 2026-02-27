@@ -34,11 +34,27 @@ services:
       - NODE_ENV=production
       - PORT=3001
       - DATABASE_URL=postgresql://${DB_USER:-kenya}:${DB_PASSWORD:-kenya_secure_2024}@postgres:5432/${DB_NAME:-kenya_quotes}
+      # ── Auth ──────────────────────────────────────────────────
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
+      - BCRYPT_ROUNDS=${BCRYPT_ROUNDS:-10}
+      # ── App URLs ──────────────────────────────────────────────
+      - FRONTEND_URL=${FRONTEND_URL:-https://cotizador.abadgroup.tech}
+      - CORS_ORIGIN=${CORS_ORIGIN:-https://cotizador.abadgroup.tech}
+      # ── AI ────────────────────────────────────────────────────
       - AI_API_KEY=${AI_API_KEY}
       - AI_PROVIDER=${AI_PROVIDER:-openai}
       - AI_MODEL=${AI_MODEL:-gpt-4o}
+      # ── Files / Quotes ────────────────────────────────────────
       - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-10}
       - QUOTE_PREFIX=${QUOTE_PREFIX:-KEN}
+      # ── Email (opcional) ──────────────────────────────────────
+      - EMAIL_HOST=${EMAIL_HOST:-}
+      - EMAIL_PORT=${EMAIL_PORT:-587}
+      - EMAIL_USER=${EMAIL_USER:-}
+      - EMAIL_PASS=${EMAIL_PASS:-}
+      - EMAIL_FROM=${EMAIL_FROM:-}
+      # ── Scraper ───────────────────────────────────────────────
       - PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
       - SCRAPER_WAIT_TYPING=${SCRAPER_WAIT_TYPING:-500}
       - SCRAPER_WAIT_RESULTS=${SCRAPER_WAIT_RESULTS:-8000}

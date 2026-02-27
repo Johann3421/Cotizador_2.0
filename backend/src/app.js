@@ -1,5 +1,12 @@
 require('dotenv').config();
 
+// ── Variables críticas — fallar rápido si faltan ──────────────
+if (!process.env.JWT_SECRET) {
+  console.error('❌ FATAL: JWT_SECRET no está definido en las variables de entorno.');
+  console.error('   Genera uno con: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
+  process.exit(1);
+}
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
