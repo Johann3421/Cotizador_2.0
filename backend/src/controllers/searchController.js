@@ -37,6 +37,7 @@ async function searchBySpecs(req, res) {
           estado:      p.estado,
           score:       p.score,
           urlBuscador: p.urlBuscador,
+          pdfSpecs:    p.pdfSpecs,
         })),
         productos_lenovo: (productos.lenovo || []).map(p => ({
           fichaId:     p.fichaId,
@@ -50,6 +51,7 @@ async function searchBySpecs(req, res) {
           estado:      p.estado,
           score:       p.score,
           urlBuscador: p.urlBuscador,
+          pdfSpecs:    p.pdfSpecs,
         })),
         productos_hp: (productos.hp || []).map(p => ({
           fichaId:     p.fichaId,
@@ -63,6 +65,7 @@ async function searchBySpecs(req, res) {
           estado:      p.estado,
           score:       p.score,
           urlBuscador: p.urlBuscador,
+          pdfSpecs:    p.pdfSpecs,
         })),
       });
     }
