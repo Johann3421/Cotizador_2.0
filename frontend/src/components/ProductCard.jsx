@@ -162,20 +162,45 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
     specChecks.push({ label, status, details });
   }
   
-  // Procesador: comparar modelo si existe (parseo robusto)
+  // Procesador: comparar modelo si existe (parseo más tolerante)
   if (requerimiento?.procesador?.modelo_principal) {
     const reqTxt = (requerimiento.procesador.modelo_principal || requerimiento.procesador.modelo || '').toLowerCase();
-    const prodTxt = (pdfSpecs.procesador_modelo || pdfSpecs.procesador_texto || '').toLowerCase();
+    const prodTxt = (pdfSpecs.procesador_modelo || pdfSpecs.procesador_texto || product.procesador || '').toLowerCase();
 
     const parseCpu = (txt) => {
       if (!txt) return null;
       const t = txt.toLowerCase();
-      const ultra = t.match(/(?:core\s+)?ultra\s*([579])\s*(\d{3})/i);
-      if (ultra) return { arch: 'intel', family: `ultra ${ultra[1]}`, rawGen: parseInt(ultra[2]) >= 200 ? 16 : 15 };
-      const intel = t.match(/i([3579])[-\s]?(\d{4,5})/i) || t.match(/core\s+i([3579])[-\s]?(\d{4,5})/i);
-      if (intel) return { arch: 'intel', family: `i${intel[1]}`, rawGen: parseInt(intel[2].toString().slice(0,2)) };
-      const amd = t.match(/ryzen\s+([3579])\s*(\d{4,5})/i);
-      if (amd) return { arch: 'amd', family: `ryzen ${amd[1]}`, rawGen: parseInt(amd[2].toString().slice(0,1)) };
+      // Detectar Core Ultra (varias formas)
+      if (/ultra/i.test(t)) {
+        // intentar extraer número de la familia (5/7/9) y cualquier número correlacionado
+        const fam = (t.match(/ultra\s*([579])/) || [null, ''])[1] || '7';
+        // si hay un número largo (e.g. 14700) usar los dos primeros dígitos como generación
+        const longNum = t.match(/(\d{3,5})/);
+        const raw = longNum ? parseInt(longNum[1].toString().slice(0, 2)) : 16;
+        return { arch: 'intel', family: `ultra ${fam}`, rawGen: raw || 16 };
+      }
+
+      // Intel clásico: i3/i5/i7/i9 con números (e.g. i7-14700, i5 1240u)
+      const intel = t.match(/(?:core\s+)?i([3579])\D*(\d{2,5})/i) || t.match(/i([3579])[-\s]?(\d{2,5})/i);
+      if (intel) {
+        const fam = `i${intel[1]}`;
+        const num = intel[2] ? intel[2].toString() : '';
+        const raw = num.length >= 2 ? parseInt(num.slice(0, 2)) : undefined;
+        return { arch: 'intel', family: fam, rawGen: raw };
+      }
+
+      // AMD Ryzen
+      const amd = t.match(/ryzen\s*([3579])\D*(\d{2,5})/i) || t.match(/ryzen\s*(\d{2,5})/i);
+      if (amd) {
+        const fam = amd[1] ? `ryzen ${amd[1]}` : 'ryzen';
+        const num = amd[2] ? amd[2].toString() : '';
+        const raw = num.length >= 2 ? parseInt(num.slice(0, 2)) : undefined;
+        return { arch: 'amd', family: fam, rawGen: raw };
+      }
+
+      // Fallback: try to pull any leading generation-like number
+      const num = t.match(/(\d{2,3})/);
+      if (num) return { arch: 'unknown', family: 'unknown', rawGen: parseInt(num[1].slice(0, 2)) };
       return null;
     };
 
@@ -183,32 +208,47 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
     const prodCpu = parseCpu(prodTxt);
     let status = 'miss';
     if (!reqCpu) status = 'ok';
-    else if (!prodCpu) status = 'miss';
-    else if (reqCpu.arch !== prodCpu.arch) status = 'partial';
+    else if (!prodCpu) status = 'partial'; // si no podemos parsear el CPU del producto, mostrar partial en vez de miss
     else {
       const reqRaw = reqCpu.rawGen || 0;
       const prodRaw = prodCpu.rawGen || 0;
       const rank = (fam) => {
         if (!fam) return 0;
-        if (fam.startsWith('ultra')) return fam.includes('9') ? 7 : fam.includes('7') ? 6 : 5;
-        if (fam.startsWith('i9')) return 5;
-        if (fam.startsWith('i7')) return 4;
-        if (fam.startsWith('i5')) return 3;
-        if (fam.startsWith('i3')) return 2;
-        if (fam.startsWith('ryzen')) return fam.includes('9') ? 5 : fam.includes('7') ? 4 : fam.includes('5') ? 3 : 2;
-        return 0;
+        const f = fam.toLowerCase();
+        if (f.startsWith('ultra')) return 8;
+        if (f.startsWith('i9')) return 7;
+        if (f.startsWith('i7')) return 6;
+        if (f.startsWith('i5')) return 5;
+        if (f.startsWith('i3')) return 4;
+        if (f.startsWith('ryzen 9')) return 7;
+        if (f.startsWith('ryzen 7')) return 6;
+        if (f.startsWith('ryzen 5')) return 5;
+        return 3;
       };
-      if (prodRaw < reqRaw) status = 'miss';
-      else if (prodRaw === reqRaw) {
-        const dr = rank(prodCpu.family) - rank(reqCpu.family);
-        status = dr > 0 ? 'better' : dr === 0 ? 'ok' : 'miss';
-      } else { // prodRaw > reqRaw
-        const dr = rank(prodCpu.family) - rank(reqCpu.family);
-        status = dr >= 0 ? 'better' : 'partial';
+
+      // Si distintas arquitecturas, no declarar miss automáticamente: si rawGen del producto es claramente superior, marcar better
+      if (reqCpu.arch !== prodCpu.arch) {
+        if (prodRaw && reqRaw && prodRaw > reqRaw) status = 'better';
+        else status = 'partial';
+      } else {
+        if (prodRaw && reqRaw) {
+          if (prodRaw < reqRaw) status = 'miss';
+          else if (prodRaw === reqRaw) {
+            const dr = rank(prodCpu.family) - rank(reqCpu.family);
+            status = dr > 0 ? 'better' : dr === 0 ? 'ok' : 'partial';
+          } else { // prodRaw > reqRaw
+            const dr = rank(prodCpu.family) - rank(reqCpu.family);
+            status = dr >= 0 ? 'better' : 'partial';
+          }
+        } else {
+          // si faltan números, usar rank comparativo
+          const dr = rank(prodCpu.family) - rank(reqCpu.family);
+          status = dr > 0 ? 'better' : dr === 0 ? 'ok' : 'partial';
+        }
       }
     }
 
-    specChecks.push({ label: `Proc: ${requerimiento.procesador.modelo_principal}`, status });
+    specChecks.push({ label: `Proc: ${requerimiento.procesador.modelo_principal}`, status, details: prodCpu ? `${prodCpu.family} gen ${prodCpu.rawGen || 'N/A'}` : 'Ficha: sin info' });
   }
 
   return (
@@ -229,6 +269,11 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
       <h4 className="font-semibold text-gray-800 text-sm leading-tight mb-2 line-clamp-2">
         {product.nombre || 'Producto sin nombre'}
       </h4>
+      {/* Número de parte (si existe) */}
+      {(() => {
+        const partNumber = product.numero_parte || product.part_number || product.part || product.partNo || product.partno || product.parte;
+        return partNumber ? <div className="text-xs text-gray-500 mb-2">N° de parte: {partNumber}</div> : null;
+      })()}
 
       {/* Score bar */}
       <div className="mb-3">
