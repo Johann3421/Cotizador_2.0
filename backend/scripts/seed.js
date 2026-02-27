@@ -5,14 +5,11 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const { Pool } = require('pg');
 
-const pool   = new Pool({ connectionString: process.env.DATABASE_URL });
-const isProd = process.argv.includes('--prod');
-
 /**
  * Ejecuta un seeder en su propia transacción.
  * Si falla, hace rollback solo de ese seeder y continúa con los demás.
  */
-async function runSeeder(name, fn) {
+async function runSeeder(pool, name, fn) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -20,7 +17,7 @@ async function runSeeder(name, fn) {
     await client.query('COMMIT');
     return true;
   } catch (err) {
-    await client.query('ROLLBACK');
+    try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
     console.error(`\n❌ Error en [${name}]`);
     console.error(`   Mensaje:  ${err.message}`);
     if (err.detail)  console.error(`   Detalle:  ${err.detail}`);
@@ -33,7 +30,8 @@ async function runSeeder(name, fn) {
   }
 }
 
-const run = async () => {
+async function runSeeders(isProd = false) {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   console.log('═══════════════════════════════════════════');
   console.log('  KENYA COTIZADOR — DATABASE SEEDERS');
   console.log(`  Entorno: ${isProd ? 'PRODUCCIÓN' : 'DESARROLLO'}`);
@@ -42,12 +40,12 @@ const run = async () => {
   const results = [];
 
   // Seeder 1: Superadmin (siempre)
-  results.push(await runSeeder('01_superadmin', require('./seeds/01_superadmin').run));
+  results.push(await runSeeder(pool, '01_superadmin', require('./seeds/01_superadmin').run));
 
   // Seeders de desarrollo (omitir con --prod)
   if (!isProd) {
-    results.push(await runSeeder('02_test_users', require('./seeds/02_test_users').run));
-    results.push(await runSeeder('03_test_data',  require('./seeds/03_test_data').run));
+    results.push(await runSeeder(pool, '02_test_users', require('./seeds/02_test_users').run));
+    results.push(await runSeeder(pool, '03_test_data',  require('./seeds/03_test_data').run));
   }
 
   console.log('\n═══════════════════════════════════════════');
@@ -60,7 +58,18 @@ const run = async () => {
   console.log('═══════════════════════════════════════════');
 
   await pool.end();
-  process.exit(failed > 0 ? 1 : 0);
-};
+  return { success: failed === 0, failed };
+}
 
-run();
+// Permitir ejecución como script independiente
+if (require.main === module) {
+  const isProd = process.argv.includes('--prod');
+  runSeeders(isProd)
+    .then(res => process.exit(res.success ? 0 : 1))
+    .catch(err => {
+      console.error('Fatal error en seeders:', err);
+      process.exit(1);
+    });
+}
+
+module.exports = { runSeeders };

@@ -152,6 +152,22 @@ async function startServer() {
       // Iniciar cron job diario (2 AM)
       iniciarCronSync();
 
+      // Ejecutar seeders automáticamente en entornos de desarrollo
+      try {
+        const runSeeds = require('../../scripts/seed').runSeeders;
+        const forceRun = process.env.RUN_SEEDS === 'true';
+        const isProdFlag = process.env.NODE_ENV === 'production' && !forceRun;
+        if (!isProdFlag) {
+          console.log('[App] ⚙️  Ejecutando seeders (modo automático)...');
+          await runSeeds(isProdFlag);
+          console.log('[App] ⚙️  Seeders finalizados');
+        } else {
+          console.log('[App] ⚙️  Entorno producción — seeders de desarrollo omitidos');
+        }
+      } catch (e) {
+        console.error('[App] ❌ Error ejecutando seeders automáticos:', e.message);
+      }
+
       // Esperar 3 segundos para que la DB esté completamente lista
       await new Promise(r => setTimeout(r, 3000));
 
