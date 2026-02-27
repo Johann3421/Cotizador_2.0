@@ -122,68 +122,6 @@ async function runMigrations() {
   }
 }
 
-async function ensureSuperadmin() {
-  try {
-    const bcrypt = require('bcrypt');
-    const email = 'admin@kenya.com';
-    const password = 'Kenya2024!';
-
-    // Verificar si ya existe superadmin
-    const existe = await pool.query("SELECT id, rol, password_hash FROM users WHERE email = $1", [email]);
-    
-    const rounds = parseInt(process.env.BCRYPT_ROUNDS || '10');
-    const correctHash = await bcrypt.hash(password, rounds);
-
-    if (existe.rows.length > 0) {
-      const user = existe.rows[0];
-      
-      // Si es superadmin, verificar password
-      if (user.rol === 'superadmin') {
-        const hashOk = await bcrypt.compare(password, user.password_hash);
-        if (hashOk) {
-          console.log('✅ Superadmin ya existe con password correcto');
-          return;
-        }
-        // Hash incorrecto → SIEMPRE actualizar (esta es operación crítica)
-        console.warn('⚠️  Detectado: Superadmin con hash incorrecto. Corrigiendo...');
-        await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [correctHash, user.id]);
-        console.log('✅ SUPERADMIN PASSWORD CORREGIDO - Hash actualizado en la base de datos');
-        console.log(`   Email: ${user.id} | Rol: superadmin`);
-        console.log(`   Contraseña: Kenya2024! | Hash: ${correctHash.substring(0, 20)}...`);
-        return;
-      }
-
-      // Existe pero no es superadmin → promover y actualizar hash
-      console.warn('⚠️  Usuario admin@kenya.com existe pero NO es superadmin. Promoviendo...');
-      await pool.query(
-        "UPDATE users SET rol = 'superadmin', password_hash = $1 WHERE id = $2",
-        [correctHash, user.id]
-      );
-      console.log('✅ Usuario promovido a superadmin y contraseña actualizada');
-      return;
-    }
-
-    // Crear superadmin solo en desarrollo (nunca automáticamente en prod)
-    if (process.env.NODE_ENV === 'production') {
-      console.error('❌ SUPERADMIN NO ENCONTRADO EN PRODUCCIÓN');
-      console.error('   Para crear superadmin, ejecutar:');
-      console.error('   node scripts/seed.js --prod');
-      console.error('   O acceder a /api/admin/init-superadmin (una sola vez)');
-      return;
-    }
-
-    // Dev: crear automáticamente
-    await pool.query(
-      `INSERT INTO users (nombre, email, password_hash, rol, empresa, aprobado_at) 
-       VALUES ($1, $2, $3, 'superadmin', 'Kenya Technology', NOW())`,
-      ['Super Admin', email, correctHash]
-    );
-    console.log('[Seeder] 🔐 Superadmin creado: admin@kenya.com / Kenya2024!');
-  } catch (err) {
-    console.error('[Seeder] Error asegurando superadmin:', err.message);
-  }
-}
-
 async function startServer() {
   try {
     // Verificar conexión a la base de datos
@@ -192,9 +130,6 @@ async function startServer() {
 
     // Ejecutar migraciones
     await runMigrations();
-
-    // Asegurar superadmin (solo en dev, produce aviso en prod)
-    await ensureSuperadmin();
 
     // Iniciar servidor
     app.listen(PORT, '0.0.0.0', async () => {
