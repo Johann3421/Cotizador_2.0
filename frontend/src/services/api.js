@@ -217,7 +217,8 @@ export async function logoutUser() {
 
 export async function getMe() {
   const response = await api.get('/auth/me');
-  return response.data;
+  // El endpoint devuelve { user: { ... } }
+  return response.data.user;
 }
 
 // ============================================
