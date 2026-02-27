@@ -9,7 +9,8 @@
     "migrate": "node src/db/migrate.js",
     "seed": "node scripts/seed.js",
     "seed:prod": "node scripts/seed.js --prod",
-    "seed:reset": "node scripts/reset-dev.js"
+    "seed:reset": "node scripts/reset-dev.js",
+    "admin:reset-password": "node scripts/update-superadmin-password.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
