@@ -156,13 +156,27 @@ async function startServer() {
       try {
         const runSeeds = require('../scripts/seed').runSeeders;
         const forceRun = process.env.RUN_SEEDS === 'true';
-        const isProdFlag = process.env.NODE_ENV === 'production' && !forceRun;
-        if (!isProdFlag) {
-          console.log('[App] ⚙️  Ejecutando seeders (modo automático)...');
-          await runSeeds(isProdFlag);
+
+        // Si se fuerza la ejecución, correr todos los seeders
+        if (forceRun) {
+          console.log('[App] ⚙️  RUN_SEEDS=true — ejecutando seeders completos');
+          await runSeeds(false);
           console.log('[App] ⚙️  Seeders finalizados');
         } else {
-          console.log('[App] ⚙️  Entorno producción — seeders de desarrollo omitidos');
+          // Verificar si hay usuarios aparte del superadmin
+          try {
+            const res = await pool.query("SELECT COUNT(*) AS cnt FROM users WHERE email <> 'admin@kenya.com'");
+            const others = parseInt(res.rows[0].cnt || '0');
+            if (others === 0) {
+              console.log('[App] ⚙️  No se encontraron usuarios (salvo superadmin) — ejecutando seeders de desarrollo');
+              await runSeeds(false);
+              console.log('[App] ⚙️  Seeders finalizados');
+            } else {
+              console.log('[App] ⚙️  Usuarios existentes detectados — omitiendo seeders de desarrollo');
+            }
+          } catch (qerr) {
+            console.error('[App] ❌ Error al comprobar usuarios antes de seeders:', qerr.message);
+          }
         }
       } catch (e) {
         console.error('[App] ❌ Error ejecutando seeders automáticos:', e.message);
