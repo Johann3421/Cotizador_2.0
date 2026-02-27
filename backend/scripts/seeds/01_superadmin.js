@@ -24,15 +24,22 @@ const run = async (client) => {
 
   if (existe.rows.length > 0) {
     const user = existe.rows[0];
+    // Siempre actualizar el hash — la migración SQL inserta un hash placeholder
+    const rounds = parseInt(process.env.BCRYPT_ROUNDS || '10');
+    const hash   = await bcrypt.hash(SUPERADMIN.password, rounds);
+
     if (user.rol !== 'superadmin') {
-      // Existe pero no es superadmin → promoverlo
       await client.query(
-        "UPDATE users SET rol = 'superadmin' WHERE id = $1",
-        [user.id]
+        "UPDATE users SET rol = 'superadmin', password_hash = $1 WHERE id = $2",
+        [hash, user.id]
       );
-      console.log(`   ⚠️  Usuario ${SUPERADMIN.email} promovido a superadmin`);
+      console.log(`   ⚠️  Usuario ${SUPERADMIN.email} promovido a superadmin y contraseña actualizada`);
     } else {
-      console.log(`   ✅ Superadmin ya existe (id: ${user.id}) — sin cambios`);
+      await client.query(
+        'UPDATE users SET password_hash = $1, aprobado_at = COALESCE(aprobado_at, NOW()) WHERE id = $2',
+        [hash, user.id]
+      );
+      console.log(`   ✅ Superadmin ya existe (id: ${user.id}) — contraseña/hash sincronizados`);
     }
     return;
   }
