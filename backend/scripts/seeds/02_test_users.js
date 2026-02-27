@@ -53,13 +53,18 @@ const run = async (client) => {
   for (const u of USUARIOS_PRUEBA) {
     const existe = await client.query('SELECT id FROM users WHERE email = $1', [u.email]);
 
-    if (existe.rows.length > 0) {
-      console.log(`   ⏭️  ${u.email} ya existe — omitiendo`);
-      continue;
-    }
-
     const hash        = await bcrypt.hash(u.password, rounds);
     const aprobadoPor = ['user', 'admin'].includes(u.rol) ? superadminId : null;
+
+    if (existe.rows.length > 0) {
+      // Ya existe — actualizar hash y rol por si quedó mal de un run anterior
+      await client.query(
+        'UPDATE users SET password_hash = $1, rol = $2, aprobado_por = $3 WHERE email = $4',
+        [hash, u.rol, aprobadoPor, u.email]
+      );
+      console.log(`   🔄 ${u.rol.padEnd(10)} ${u.email.padEnd(30)} hash actualizado`);
+      continue;
+    }
 
     // aprobado_at: literal NOW() for approved roles, NULL otherwise
     if (['user', 'admin'].includes(u.rol)) {
