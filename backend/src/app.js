@@ -144,34 +144,35 @@ async function ensureSuperadmin() {
           console.log('✅ Superadmin ya existe con password correcto');
           return;
         }
-        // Hash incorrecto, actualizar (solo en desarrollo)
-        if (process.env.NODE_ENV !== 'production') {
-          await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [correctHash, user.id]);
-          console.log('⚠️  Superadmin password actualizado');
-          return;
-        }
-        // En producción, alertar
-        console.warn('⚠️  Superadmin existe pero password es incorrecto. Ejecutar:');
-        console.warn('   node scripts/update-superadmin-password.js admin@kenya.com NuevaPassword');
+        // Hash incorrecto → SIEMPRE actualizar (esta es operación crítica)
+        console.warn('⚠️  Detectado: Superadmin con hash incorrecto. Corrigiendo...');
+        await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [correctHash, user.id]);
+        console.log('✅ SUPERADMIN PASSWORD CORREGIDO - Hash actualizado en la base de datos');
+        console.log(`   Email: ${user.id} | Rol: superadmin`);
+        console.log(`   Contraseña: Kenya2024! | Hash: ${correctHash.substring(0, 20)}...`);
         return;
       }
 
       // Existe pero no es superadmin → promover y actualizar hash
+      console.warn('⚠️  Usuario admin@kenya.com existe pero NO es superadmin. Promoviendo...');
       await pool.query(
         "UPDATE users SET rol = 'superadmin', password_hash = $1 WHERE id = $2",
         [correctHash, user.id]
       );
-      console.log('⚠️  Usuario promovido a superadmin');
+      console.log('✅ Usuario promovido a superadmin y contraseña actualizada');
       return;
     }
 
-    // Crear superadmin solo en desarrollo/testing
+    // Crear superadmin solo en desarrollo (nunca automáticamente en prod)
     if (process.env.NODE_ENV === 'production') {
-      console.warn('⚠️  No se encontró superadmin en PRODUCCIÓN. Ejecutar:');
-      console.warn('   node scripts/seed.js --prod');
+      console.error('❌ SUPERADMIN NO ENCONTRADO EN PRODUCCIÓN');
+      console.error('   Para crear superadmin, ejecutar:');
+      console.error('   node scripts/seed.js --prod');
+      console.error('   O acceder a /api/admin/init-superadmin (una sola vez)');
       return;
     }
 
+    // Dev: crear automáticamente
     await pool.query(
       `INSERT INTO users (nombre, email, password_hash, rol, empresa, aprobado_at) 
        VALUES ($1, $2, $3, 'superadmin', 'Kenya Technology', NOW())`,

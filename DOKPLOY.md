@@ -14,6 +14,7 @@ DATABASE_URL=postgresql://user:password@host:5432/cotizador_db
 # Server
 PORT=3001
 NODE_ENV=production
+BCRYPT_ROUNDS=10
 
 # JWT
 JWT_SECRET=tu-super-secreto-aleatorio-muy-seguro-min-32-chars
@@ -31,6 +32,10 @@ EMAIL_PASSWORD=app-password
 # Frontend
 CORS_ORIGIN=https://cotizador.abadgroup.tech
 FRONTEND_URL=https://cotizador.abadgroup.tech
+
+# Admin Recovery
+# ⚠️ IMPORTANTE: Cambiar a un valor secreto aleatorio en producción
+ADMIN_INIT_SECRET=tu-secreto-aleatorio-muy-seguro
 
 # Playwright/Scraping
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
@@ -130,8 +135,64 @@ curl -X POST https://cotizador.abadgroup.tech/api/auth/login \
 ## 6. Troubleshooting
 
 ### Error: `401 Unauthorized` en login
-**Causa:** Superadmin no existe
-**Solución:** Ejecutar `node scripts/seed.js --prod` en terminal de Dokploy
+**Causa:** Superadmin no existe O superadmin tiene contraseña incorrecta
+
+**Soluciones (por orden recomendado):**
+
+**1️⃣ Auto-reparación (RECOMENDADO - 10 segundos)**
+- Re-desplegar el backend (Dokploy redeploy)
+- Éé sistema detectará automáticamente la contraseña incorrecta y la corregirá
+- Verificar logs: "SUPERADMIN PASSWORD CORREGIDO"
+- Intentar login nuevamente
+
+**2️⃣ Usar endpoint de rescate (Sin redeploy)**
+Requiere: `ADMIN_INIT_SECRET` configurado en variables de entorno
+
+```bash
+curl -X POST https://cotizador.abadgroup.tech/api/admin/init-superadmin \
+  -H "Content-Type: application/json" \
+  -d '{
+    "secret": "tu-secreto-aleatorio-muy-seguro"
+  }'
+```
+
+Respuesta exitosa:
+```json
+{
+  "ok": true,
+  "message": "Superadmin actualizado",
+  "email": "admin@kenya.com",
+  "password": "Kenya2024!"
+}
+```
+
+**3️⃣ Ejecutar seeder en terminal (Dokploy)**
+```bash
+# En terminal de Dokploy
+cd /app/backend
+node scripts/seed.js --prod
+```
+
+Logs esperados:
+```
+✅ Migración ejecutada: 001_initial.sql
+✅ Migración ejecutada: 002_auth.sql
+✅ Seeding superadmin...
+🔐 Superadmin creado: admin@kenya.com / Kenya2024!
+```
+
+**4️⃣ Reset manual en DB (última opción)**
+```bash
+# Conectar a PostgreSQL
+psql postgresql://user:password@host:5432/cotizador_db
+
+-- Generar nuevo hash
+SELECT crypt('Kenya2024!', gen_salt('bf', 10)) as new_hash;
+
+-- Copiar el hash y ejecutar:
+UPDATE users SET password_hash = '<hash_copiado>' 
+WHERE email = 'admin@kenya.com';
+```
 
 ### Error: `ECONNREFUSED` en seeder
 **Causa:** No puede conectarse a PostgreSQL

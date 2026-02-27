@@ -140,8 +140,42 @@ router.post('/quote-requests', verificarToken, async (req, res) => {
 // ============================================
 // HEALTH CHECK
 // ============================================
-router.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0' });
+router.get('/health', async (req, res) => {
+  try {
+    // Verificar conexión a DB
+    const dbCheck = await pool.query('SELECT NOW()');
+    
+    // Verificar superadmin
+    const superadminCheck = await pool.query(
+      "SELECT id, email, rol FROM users WHERE email = 'admin@kenya.com' LIMIT 1"
+    );
+
+    const superadminExists = superadminCheck.rows.length > 0;
+    const superadminValid = superadminExists && superadminCheck.rows[0].rol === 'superadmin';
+
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      version: '1.0.0',
+      database: 'connected',
+      superadmin: {
+        exists: superadminExists,
+        email: superadminExists ? superadminCheck.rows[0].email : null,
+        role: superadminExists ? superadminCheck.rows[0].rol : null,
+        valid: superadminValid,
+        // Debug: si no es válido, sugiere acción
+        message: !superadminValid 
+          ? 'Redeploy backend o ejecutar: node scripts/seed.js --prod' 
+          : 'OK'
+      }
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      error: err.message,
+      superadmin: { exists: false, valid: false }
+    });
+  }
 });
 
 module.exports = router;
