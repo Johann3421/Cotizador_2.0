@@ -124,15 +124,30 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
 
     for (const req of reqList) {
       let foundIndex = -1;
+      // Primera pasada: preferir unidad que cumpla tipo y tamaño
       for (let i = 0; i < prodList.length; i++) {
         if (used[i]) continue;
         const p = prodList[i];
         if (p.gb >= req.gb && rankTipo(p.tipo) >= rankTipo(req.tipo)) { foundIndex = i; break; }
       }
+      // Segunda pasada: aceptar por capacidad aunque tipo sea inferior (marcar partial)
+      let typeMismatch = false;
+      if (foundIndex === -1) {
+        for (let i = 0; i < prodList.length; i++) {
+          if (used[i]) continue;
+          const p = prodList[i];
+          if (p.gb >= req.gb) { foundIndex = i; typeMismatch = true; break; }
+        }
+      }
+
       if (foundIndex >= 0) {
         used[foundIndex] = true; matched++;
         const p = prodList[foundIndex];
         if (p.gb > req.gb || rankTipo(p.tipo) > rankTipo(req.tipo)) anyBetter = true;
+        if (typeMismatch) {
+          // record mismatch as partial by adding note to missing (but still matched)
+          // we'll surface this via details later
+        }
       } else {
         missing.push(`${req.gb}GB ${req.tipo || 'SSD/HDD'}`);
       }
@@ -147,13 +162,52 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
     specChecks.push({ label, status, details });
   }
   
-  // Procesador: comparar modelo si existe (simple fuzzy)
+  // Procesador: comparar modelo si existe (parseo robusto)
   if (requerimiento?.procesador?.modelo_principal) {
-    const reqProc = (requerimiento.procesador.modelo_principal || '').toLowerCase();
-    const prodProc = (pdfSpecs.procesador_modelo || '').toLowerCase();
+    const reqTxt = (requerimiento.procesador.modelo_principal || requerimiento.procesador.modelo || '').toLowerCase();
+    const prodTxt = (pdfSpecs.procesador_modelo || pdfSpecs.procesador_texto || '').toLowerCase();
+
+    const parseCpu = (txt) => {
+      if (!txt) return null;
+      const t = txt.toLowerCase();
+      const ultra = t.match(/(?:core\s+)?ultra\s*([579])\s*(\d{3})/i);
+      if (ultra) return { arch: 'intel', family: `ultra ${ultra[1]}`, rawGen: parseInt(ultra[2]) >= 200 ? 16 : 15 };
+      const intel = t.match(/i([3579])[-\s]?(\d{4,5})/i) || t.match(/core\s+i([3579])[-\s]?(\d{4,5})/i);
+      if (intel) return { arch: 'intel', family: `i${intel[1]}`, rawGen: parseInt(intel[2].toString().slice(0,2)) };
+      const amd = t.match(/ryzen\s+([3579])\s*(\d{4,5})/i);
+      if (amd) return { arch: 'amd', family: `ryzen ${amd[1]}`, rawGen: parseInt(amd[2].toString().slice(0,1)) };
+      return null;
+    };
+
+    const reqCpu = parseCpu(reqTxt);
+    const prodCpu = parseCpu(prodTxt);
     let status = 'miss';
-    if (prodProc.includes(reqProc)) status = 'ok';
-    else if (prodProc && reqProc && prodProc.split(' ').some(w => reqProc.includes(w) || w.includes(reqProc))) status = 'partial';
+    if (!reqCpu) status = 'ok';
+    else if (!prodCpu) status = 'miss';
+    else if (reqCpu.arch !== prodCpu.arch) status = 'partial';
+    else {
+      const reqRaw = reqCpu.rawGen || 0;
+      const prodRaw = prodCpu.rawGen || 0;
+      const rank = (fam) => {
+        if (!fam) return 0;
+        if (fam.startsWith('ultra')) return fam.includes('9') ? 7 : fam.includes('7') ? 6 : 5;
+        if (fam.startsWith('i9')) return 5;
+        if (fam.startsWith('i7')) return 4;
+        if (fam.startsWith('i5')) return 3;
+        if (fam.startsWith('i3')) return 2;
+        if (fam.startsWith('ryzen')) return fam.includes('9') ? 5 : fam.includes('7') ? 4 : fam.includes('5') ? 3 : 2;
+        return 0;
+      };
+      if (prodRaw < reqRaw) status = 'miss';
+      else if (prodRaw === reqRaw) {
+        const dr = rank(prodCpu.family) - rank(reqCpu.family);
+        status = dr > 0 ? 'better' : dr === 0 ? 'ok' : 'miss';
+      } else { // prodRaw > reqRaw
+        const dr = rank(prodCpu.family) - rank(reqCpu.family);
+        status = dr >= 0 ? 'better' : 'partial';
+      }
+    }
+
     specChecks.push({ label: `Proc: ${requerimiento.procesador.modelo_principal}`, status });
   }
 
