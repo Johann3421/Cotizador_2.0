@@ -2,19 +2,40 @@ import axios from 'axios';
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 120000, // 2 minutos para operaciones de scraping/AI
+  timeout: 120000,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Interceptor para manejar errores globalmente
+// ── JWT Interceptor (request) ──
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// ── Response Interceptor (manejo de 401) ──
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    const status = error.response?.status;
+    const code   = error.response?.data?.code;
+
+    if (status === 401 || code === 'TOKEN_EXPIRED') {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      // Redirigir a login si no estamos ya ahí
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login';
+      }
+    }
+
     const message = error.response?.data?.error || error.response?.data?.details || error.message || 'Error de conexión';
     console.error('API Error:', message);
-    return Promise.reject({ message, status: error.response?.status });
+    return Promise.reject({ message, status });
   }
 );
 
@@ -172,6 +193,111 @@ export async function triggerCatalogSync() {
  */
 export async function getCatalogStatus() {
   const response = await api.get('/admin/catalog-status');
+  return response.data;
+}
+
+// ============================================
+// AUTH API
+// ============================================
+
+export async function loginUser(email, password) {
+  const response = await api.post('/auth/login', { email, password });
+  return response.data;
+}
+
+export async function registerUser(data) {
+  const response = await api.post('/auth/register', data);
+  return response.data;
+}
+
+export async function logoutUser() {
+  const response = await api.post('/auth/logout');
+  return response.data;
+}
+
+export async function getMe() {
+  const response = await api.get('/auth/me');
+  return response.data;
+}
+
+// ============================================
+// ADMIN API — Usuarios
+// ============================================
+
+export async function getAdminStats() {
+  const response = await api.get('/admin/stats');
+  return response.data;
+}
+
+export async function listUsers(params = {}) {
+  const response = await api.get('/admin/users', { params });
+  return response.data;
+}
+
+export async function approveUser(id) {
+  const response = await api.patch(`/admin/users/${id}/approve`);
+  return response.data;
+}
+
+export async function rejectUser(id, motivo) {
+  const response = await api.patch(`/admin/users/${id}/reject`, { motivo });
+  return response.data;
+}
+
+export async function changeUserRole(id, rol) {
+  const response = await api.patch(`/admin/users/${id}/role`, { rol });
+  return response.data;
+}
+
+// ============================================
+// ADMIN API — Solicitudes de cotización
+// ============================================
+
+export async function listQuoteRequests(params = {}) {
+  const response = await api.get('/admin/quote-requests', { params });
+  return response.data;
+}
+
+export async function getQuoteRequest(id) {
+  const response = await api.get(`/admin/quote-requests/${id}`);
+  return response.data;
+}
+
+export async function updateQuoteRequestStatus(id, estado) {
+  const response = await api.patch(`/admin/quote-requests/${id}/status`, { estado });
+  return response.data;
+}
+
+export async function markQuoteRequestSent(id, pdfUrl) {
+  const response = await api.patch(`/admin/quote-requests/${id}/sent`, { pdf_url: pdfUrl });
+  return response.data;
+}
+
+// ============================================
+// USER API — Solicitudes de cotización (usuario)
+// ============================================
+
+export async function createQuoteRequest(data) {
+  const response = await api.post('/quote-requests', data);
+  return response.data;
+}
+
+// ============================================
+// NOTIFICATIONS API
+// ============================================
+
+export async function getNotifications(unread = false) {
+  const response = await api.get('/admin/notifications', { params: { unread } });
+  return response.data;
+}
+
+export async function getUnreadCount() {
+  const response = await api.get('/admin/notifications/count');
+  return response.data;
+}
+
+export async function markNotificationsRead() {
+  const response = await api.patch('/admin/notifications/read');
   return response.data;
 }
 

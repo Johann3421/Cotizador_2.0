@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Wand2, Search, FileCheck, Check, Loader2, RefreshCw } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 import UploadZone from '../components/UploadZone';
 import RequirementCard from '../components/RequirementCard';
 import ProductCard from '../components/ProductCard';
 import QuoteBuilder from '../components/QuoteBuilder';
 import QuotePreview from '../components/QuotePreview';
+import QuoteRequestForm from '../components/QuoteRequestForm';
 import { extractFromImage, searchProducts, updateRequirement, createQuote, refreshCatalog } from '../services/api';
 
 const STEPS = [
@@ -17,6 +19,7 @@ const STEPS = [
 
 export default function NewQuote() {
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -423,22 +426,33 @@ export default function NewQuote() {
       )}
 
       {/* ============================================ */}
-      {/* STEP 4: Generate Quote */}
+      {/* STEP 4: Generate Quote (admin) or Request (user) */}
       {/* ============================================ */}
       {step === 4 && (
         <div className="space-y-6">
           <div className="card">
-            <h2 className="text-xl font-bold text-gray-800">Paso 4: Generar Cotización</h2>
+            <h2 className="text-xl font-bold text-gray-800">
+              Paso 4: {isAdmin ? 'Generar Cotización' : 'Solicitar Cotización'}
+            </h2>
             <p className="text-gray-500 text-sm mt-1">
-              Completa los datos del cliente, ajusta cantidades y precios, y genera la cotización final.
+              {isAdmin
+                ? 'Completa los datos del cliente, ajusta cantidades y precios, y genera la cotización final.'
+                : 'Completa tus datos de contacto y un administrador preparará tu cotización.'}
             </p>
           </div>
 
-          <QuoteBuilder
-            selectedProducts={selectedProducts}
-            onSubmit={handleGenerateQuote}
-            loading={loading}
-          />
+          {isAdmin ? (
+            <QuoteBuilder
+              selectedProducts={selectedProducts}
+              onSubmit={handleGenerateQuote}
+              loading={loading}
+            />
+          ) : (
+            <QuoteRequestForm
+              selectedProducts={selectedProducts}
+              requirementId={requirementId}
+            />
+          )}
         </div>
       )}
 

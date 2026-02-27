@@ -5,6 +5,8 @@ const extractController = require('../controllers/extractController');
 const searchController = require('../controllers/searchController');
 const quoteController = require('../controllers/quoteController');
 const { ejecutarSyncManual, isSyncEnProgreso } = require('../jobs/syncCatalog');
+const { verificarToken, verificarTokenOpcional } = require('../middleware/auth');
+const requireRole = require('../middleware/requireRole');
 const { Pool } = require('pg');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -102,6 +104,37 @@ router.post('/admin/sync', async (req, res) => {
   ejecutarSyncManual((progreso) => {
     console.log('[Sync] Progreso:', JSON.stringify(progreso));
   }).catch(e => console.error('[Sync] Error:', e.message));
+});
+
+// ============================================
+// QUOTE REQUESTS (solicitudes de usuario)
+// ============================================
+
+router.post('/quote-requests', verificarToken, async (req, res) => {
+  try {
+    const { quote_id, requirement_id, nombre_contacto, email_contacto, telefono, empresa, notas } = req.body;
+    const result = await pool.query(
+      `INSERT INTO quote_requests
+         (user_id, quote_id, requirement_id, nombre_contacto, email_contacto, telefono, empresa, notas)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [req.user.id, quote_id || null, requirement_id || null, nombre_contacto, email_contacto, telefono, empresa, notas]
+    );
+    // Notificar admins
+    const admins = await pool.query("SELECT id FROM users WHERE rol IN ('admin','superadmin')");
+    const notifService = require('../services/notificationService');
+    for (const admin of admins.rows) {
+      await notifService.crearNotificacion(
+        admin.id,
+        'nueva_solicitud',
+        'Nueva solicitud de cotización',
+        `${nombre_contacto} (${empresa}) solicita cotización`,
+        { solicitud_id: result.rows[0].id }
+      );
+    }
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ============================================
