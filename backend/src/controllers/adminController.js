@@ -14,9 +14,21 @@ const listarUsuarios = async (req, res) => {
     const params = [parseInt(limit), offset];
     let whereClause = '';
 
+    // soportar filtros de la UI: 'pendientes', 'activos', 'rechazados'
     if (estado) {
-      whereClause = 'WHERE u.rol = $3';
-      params.push(estado);
+      if (estado === 'pendientes') {
+        whereClause = "WHERE u.rol = $3";
+        params.push('pending');
+      } else if (estado === 'activos') {
+        // activos = no pendientes y no rechazados
+        whereClause = "WHERE u.rol != 'pending' AND u.rechazado_at IS NULL";
+      } else if (estado === 'rechazados') {
+        whereClause = 'WHERE u.rechazado_at IS NOT NULL';
+      } else {
+        // permitir pasar directamente 'user', 'admin', 'superadmin', 'pending'
+        whereClause = 'WHERE u.rol = $3';
+        params.push(estado);
+      }
     }
 
     const result = await pool.query(
@@ -32,11 +44,22 @@ const listarUsuarios = async (req, res) => {
       params
     );
 
-    const countParams = estado ? [estado] : [];
-    const total = await pool.query(
-      `SELECT COUNT(*) FROM users ${estado ? 'WHERE rol = $1' : ''}`,
-      countParams
-    );
+    let countQuery = 'SELECT COUNT(*) FROM users';
+    let countParams = [];
+    if (estado) {
+      if (estado === 'pendientes') {
+        countQuery += " WHERE rol = $1";
+        countParams.push('pending');
+      } else if (estado === 'activos') {
+        countQuery += " WHERE rol != 'pending' AND rechazado_at IS NULL";
+      } else if (estado === 'rechazados') {
+        countQuery += ' WHERE rechazado_at IS NOT NULL';
+      } else {
+        countQuery += ' WHERE rol = $1';
+        countParams.push(estado);
+      }
+    }
+    const total = await pool.query(countQuery, countParams);
 
     res.json({
       users: result.rows,
