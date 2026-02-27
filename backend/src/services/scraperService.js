@@ -35,36 +35,49 @@ const cargarPdfSpecs = async (fichas) => {
 // FUNCIÓN PRINCIPAL — Busca en DB, si no hay datos hace scraping
 // ─────────────────────────────────────────────────────────────
 const searchCompatibleProducts = async (specs) => {
-  const tipo   = (specs.tipo_equipo || 'desktop').toLowerCase();
-  const MARCAS = ['kenya', 'lenovo', 'hp'];
-  const result = {};
+  const tipo    = (specs.tipo_equipo || 'desktop').toLowerCase();
+  const MARCAS  = ['kenya', 'lenovo', 'hp'];
+  const result  = {};
 
   for (const marca of MARCAS) {
-    // 1. Intentar desde DB (traer 15 para filtrar después)
+    // 1. Obtener fichas de DB o scraping
     let fichas = await buscarEnDB(marca, tipo, 15);
-
-    // 2. Si no hay en DB → scrapear ahora mismo
     if (fichas.length === 0) {
       console.log(`[Scraper] DB vacía para ${marca}/${tipo} → scraping directo...`);
       fichas = await scrapearMarca(marca, tipo);
-      if (fichas.length > 0) {
-        await guardarEnDB(fichas, marca, tipo);
-        console.log(`[Scraper] ${fichas.length} fichas guardadas para ${marca}/${tipo}`);
-      }
+      if (fichas.length > 0) await guardarEnDB(fichas, marca, tipo);
     }
 
-    // 3. Cargar specs del PDF para comparación precisa
-    fichas = await cargarPdfSpecs(fichas);
+    if (fichas.length === 0) {
+      result[marca] = [];
+      continue;
+    }
 
-    // 4. Calcular scores y filtrar solo iguales o superiores (score >= 60)
-    const conScore = fichas
-      .map(f => ({ ...f, score: calcularScore(f, specs) }))
-      .filter(f => f.score >= 60)
+    // 2. Cargar specs del PDF en batches de 3
+    console.log(`[Scraper] Cargando PDFs para ${fichas.length} fichas de ${marca}...`);
+    for (let i = 0; i < fichas.length; i += 3) {
+      const batch = fichas.slice(i, i + 3);
+      await Promise.all(batch.map(async (f) => {
+        if (f.pdfUrl && !f.pdfSpecs) {
+          f.pdfSpecs = await extraerSpecsDePdf(f.pdfUrl);
+          if (f.pdfSpecs?.specs?.grafica_tipo) {
+            console.log(`[Scraper] ${(f.nombre || '').substring(0, 30)}: gráfica=${f.pdfSpecs.specs.grafica_tipo}${f.pdfSpecs.specs.grafica_vram_gb ? ' ' + f.pdfSpecs.specs.grafica_vram_gb + 'GB' : ''}, RAM=${f.pdfSpecs.specs.ram_gb}GB ${f.pdfSpecs.specs.ram_tipo || ''}`);
+          }
+        }
+      }));
+      if (i + 3 < fichas.length) await new Promise(r => setTimeout(r, 300));
+    }
+
+    // 3. Calcular scores y filtrar fichas iguales o superiores (score >= 50)
+    const conScore = fichas.map(f => ({ ...f, score: calcularScore(f, specs) }));
+    const compatibles = conScore
+      .filter(f => f.score >= 50)
       .sort((a, b) => b.score - a.score)
       .slice(0, 10);
 
-    result[marca] = conScore;
-    console.log(`[Scraper] ${marca}: ${conScore.length} fichas compatibles (de ${fichas.length} totales, top score: ${conScore[0]?.score ?? 0})`);
+    result[marca] = compatibles;
+    const scores = conScore.map(f => f.score).sort((a, b) => b - a);
+    console.log(`[Scraper] ${marca}: ${compatibles.length} compatibles de ${fichas.length} — scores: [${scores.join(', ')}]`);
   }
 
   return result;
@@ -302,137 +315,192 @@ const guardarEnDB = async (fichas, marca, tipo) => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// SCORE DE COMPATIBILIDAD (usa specs del PDF si están disponibles)
-// Solo retorna fichas con score >= 60 (iguales o superiores al req)
+// PARSEAR data-fp (texto del card HTML) — fuente rápida sin HTTP
+// Formato: "PROCESADOR: ... RAM: ... ALMACENAMIENTO: ... LAN: SI..."
+// ─────────────────────────────────────────────────────────────
+const parsearDataFp = (dataFp) => {
+  if (!dataFp) return {};
+  const spec = {};
+
+  const proc = dataFp.match(/PROCESADOR[:\s]+(.+?)(?:RAM|ALMACENAMIENTO|LAN|WLAN|USB|$)/i);
+  if (proc) spec.procesador_fp = proc[1].trim();
+
+  const ram = dataFp.match(/RAM[:\s]+(\d+)\s*GB\s*(DDR[45]?)/i);
+  if (ram) { spec.ram_gb_fp = parseInt(ram[1]); spec.ram_tipo_fp = ram[2].toUpperCase(); }
+
+  const st = dataFp.match(/ALMACENAMIENTO[:\s]+(\d+)\s*(GB|TB)\s*(SSD|NVMe|HDD)?/i);
+  if (st) {
+    const mult = st[2].toUpperCase() === 'TB' ? 1000 : 1;
+    spec.st_gb_fp   = parseInt(st[1]) * mult;
+    spec.st_tipo_fp = st[3] || 'SSD';
+  }
+
+  const tUp = dataFp.toUpperCase();
+  if      (tUp.includes('WINDOWS 11')) spec.so_fp = 'Windows 11';
+  else if (tUp.includes('WINDOWS 10')) spec.so_fp = 'Windows 10';
+
+  spec.lan_fp = /LAN[:\s]+SI/i.test(dataFp);
+
+  return spec;
+};
+
+// ─────────────────────────────────────────────────────────────
+// JERARQUÍA DE PROCESADORES para comparación numérica
+// ─────────────────────────────────────────────────────────────
+const getProcScore = (modeloFicha, modelosRequeridos, genFicha, genReq) => {
+  const mf = (modeloFicha || '').toLowerCase().replace(/\s+/g, ' ');
+
+  for (const modReq of modelosRequeridos) {
+    const mr = (modReq || '').toLowerCase().replace(/\s+/g, ' ');
+    if (!mr) continue;
+
+    if (mf.includes(mr)) return 30;
+
+    const numReq   = mr.match(/[i][3579]-?(\d{4,5})/)?.[1];
+    const numFicha = mf.match(/[i][3579]-?(\d{4,5})/)?.[1];
+    if (numReq && numFicha) {
+      if (parseInt(numFicha) >= parseInt(numReq)) return 28;
+      if (parseInt(numFicha) >= parseInt(numReq) - 100) return 20;
+    }
+
+    if (mr.includes('ultra') && mf.includes('ultra')) return 28;
+    if (mr.includes('ultra') && (mf.includes('i9') || mf.includes('i7-14'))) return 25;
+
+    const famReq   = mr.match(/(i[3579]|ultra [579]|ryzen [3579])/)?.[1];
+    const famFicha = mf.match(/(i[3579]|ultra [579]|ryzen [3579])/)?.[1];
+    if (famReq && famFicha) {
+      if (famFicha === famReq) {
+        if (genFicha && genReq) {
+          if (genFicha >= genReq) return 25;
+          if (genFicha === genReq - 1) return 18;
+          return 10;
+        }
+        return 22;
+      }
+      const ORDEN = { 'i9': 5, 'i7': 4, 'i5': 3, 'i3': 2, 'ultra 9': 7, 'ultra 7': 6, 'ultra 5': 5 };
+      if ((ORDEN[famFicha] || 0) > (ORDEN[famReq] || 0)) return 25;
+      if ((ORDEN[famFicha] || 0) === (ORDEN[famReq] || 0)) return 20;
+    }
+  }
+  return 0;
+};
+
+// ─────────────────────────────────────────────────────────────
+// SCORE DE COMPATIBILIDAD — Compara ficha vs requerimiento
+// Usa PDF specs si disponibles, data-fp como fallback
+// SOLO retorna score >= 50 (fichas iguales o superiores)
 // ─────────────────────────────────────────────────────────────
 const calcularScore = (ficha, req) => {
-  const hayHtml = ((ficha.specsFp || '') + ' ' + JSON.stringify(ficha.specsObj || {})).toLowerCase();
-  const pdf     = ficha.pdfSpecs?.specs || {};
-
   let score = 0;
+  const pdf  = ficha.pdfSpecs?.specs || {};
+  const fp   = parsearDataFp(ficha.specsFp);
+  const html = ((ficha.specsFp || '') + ' ' + JSON.stringify(ficha.specsObj || {})).toLowerCase();
 
-  // ══════════════════════════════════════════
-  // PROCESADOR (30 puntos)
-  // ══════════════════════════════════════════
-  const modelos = (
-    req.procesador?.modelos_aceptados ||
-    [req.procesador?.modelo_principal, req.procesador?.modelo].filter(Boolean)
-  ).map(m => (m || '').trim().toLowerCase()).filter(Boolean);
+  // ════════════════════════════════════════
+  // PROCESADOR (30 pts)
+  // ════════════════════════════════════════
+  const modelos_req = (req.procesador?.modelos_aceptados ||
+    [req.procesador?.modelo_principal, req.procesador?.modelo].filter(Boolean));
 
-  let procScore = 0;
-  for (const mod of modelos) {
-    if (hayHtml.includes(mod) || (pdf.procesador_modelo || '').toLowerCase().includes(mod)) {
-      procScore = 30; break;
-    }
-    // Match por familia (ultra 5, i7-13xxx, etc.)
-    const familia = mod.match(/(ultra \d+|i[357]-?\d{4,5}|i[357] \d{4,5}|ryzen [579] \d{4})/)?.[0];
-    if (familia) {
-      if (hayHtml.includes(familia) || (pdf.procesador_modelo || '').toLowerCase().includes(familia)) {
-        procScore = Math.max(procScore, 25);
-      }
-    }
-    // Match por generación numérica
-    const genReq  = parseInt(mod.match(/(\d{2})\d{3}/)?.[1] || mod.match(/(?:ultra|series)\s*(\d)/i)?.[1] || '0');
-    const genFicha = pdf.procesador_generacion || 0;
-    if (genFicha >= genReq && genFicha > 0 && genReq > 0) procScore = Math.max(procScore, 28);
-    // Fuzzy: ultra, i7, i5
-    if (procScore === 0) {
-      if (mod.includes('ultra') && hayHtml.includes('ultra'))  procScore = Math.max(procScore, 22);
-      else if (mod.includes('i7') && hayHtml.includes('i7'))   procScore = Math.max(procScore, 20);
-      else if (mod.includes('i5') && hayHtml.includes('i5'))   procScore = Math.max(procScore, 12);
-    }
-  }
-  score += procScore;
+  const modeloFicha = pdf.procesador_modelo || fp.procesador_fp || '';
+  const genFicha    = pdf.procesador_generacion || 0;
+  const genReq = (() => {
+    const m = (modelos_req[0] || '').match(/[iI][3579]-?(\d{2})\d{3}/);
+    return m ? parseInt(m[1]) : 0;
+  })();
+  score += getProcScore(modeloFicha, modelos_req, genFicha, genReq);
 
-  // ══════════════════════════════════════════
-  // RAM (25 puntos)
-  // ══════════════════════════════════════════
-  const ramReq   = req.memoria_ram?.capacidad_gb || 0;
-  const tipoReq  = (req.memoria_ram?.tipo || '').toUpperCase();
-  if (ramReq > 0) {
-    const ramFichaGb = pdf.ram_gb || gbDesdeTexto(hayHtml.match(/(\d+)\s*gb\s*(ddr|ram)/i)?.[0] || '');
-    const tipoFicha  = (pdf.ram_tipo || hayHtml.match(/(ddr[45]|lpddr[45]x?)/i)?.[1] || '').toUpperCase();
+  // ════════════════════════════════════════
+  // RAM (25 pts)
+  // ════════════════════════════════════════
+  const ramReq_gb   = req.memoria_ram?.capacidad_gb || 0;
+  const ramReq_tipo = (req.memoria_ram?.tipo || '').toUpperCase();
+  const ramFicha_gb   = pdf.ram_gb || fp.ram_gb_fp || 0;
+  const ramFicha_tipo = (pdf.ram_tipo || fp.ram_tipo_fp || '').toUpperCase();
 
-    if (ramFichaGb >= ramReq) score += 20;
-    else if (ramFichaGb > 0) score += Math.round((ramFichaGb / ramReq) * 12);
-
-    if (tipoFicha && tipoReq) {
-      const tipoPts = tipoFicha === tipoReq ? 5
-                    : (tipoFicha === 'DDR5' && tipoReq === 'DDR4') ? 5
-                    : (tipoFicha === 'DDR4' && tipoReq === 'DDR5') ? -5
-                    : 0;
-      score += tipoPts;
+  if (ramReq_gb > 0) {
+    if (ramFicha_gb >= ramReq_gb) {
+      score += 20;
+      if (!ramReq_tipo || ramFicha_tipo === ramReq_tipo) score += 5;
+      else if (ramFicha_tipo === 'DDR5' && ramReq_tipo === 'DDR4') score += 5;
+      else if (ramFicha_tipo === 'DDR4' && ramReq_tipo === 'DDR5') score += 1;
+    } else if (ramFicha_gb > 0) {
+      const ratio = ramFicha_gb / ramReq_gb;
+      if (ratio >= 0.5) score += Math.round(ratio * 15);
     }
   } else {
-    score += 25; // Sin requisito de RAM → no penalizar
+    score += 20;
   }
 
-  // ══════════════════════════════════════════
-  // ALMACENAMIENTO (20 puntos)
-  // ══════════════════════════════════════════
-  const stReqs  = Array.isArray(req.almacenamiento) ? req.almacenamiento : [req.almacenamiento].filter(Boolean);
-  const stFicha = pdf.almacenamiento?.length > 0
+  // ════════════════════════════════════════
+  // ALMACENAMIENTO (20 pts)
+  // ════════════════════════════════════════
+  const stReqs = Array.isArray(req.almacenamiento)
+    ? req.almacenamiento
+    : [{ capacidad_gb: req.almacenamiento?.capacidad_gb, tipo: req.almacenamiento?.tipo }].filter(r => r.capacidad_gb);
+
+  const stFichas = pdf.almacenamiento?.length > 0
     ? pdf.almacenamiento
-    : [{
-        gb:   hayHtml.includes('1 tb') || hayHtml.includes('1tb') ? 1000 : gbDesdeTexto(hayHtml.match(/(\d+)\s*gb\s*ssd/i)?.[0] || ''),
-        tipo: /nvme|m\.2/.test(hayHtml) ? 'NVMe SSD' : /ssd/.test(hayHtml) ? 'SSD' : 'HDD',
-      }];
+    : fp.st_gb_fp ? [{ gb: fp.st_gb_fp, tipo: fp.st_tipo_fp || 'SSD' }]
+    : (() => {
+        if (html.includes('1 tb') || html.includes('1tb')) return [{ gb: 1000, tipo: 'SSD' }];
+        const m = html.match(/(\d+)\s*gb\s*(?:nvme|ssd|hdd)/i);
+        if (m) return [{ gb: parseInt(m[1]), tipo: /nvme/i.test(html) ? 'NVMe SSD' : 'SSD' }];
+        return [];
+      })();
 
-  let stScore = 0;
-  for (const req_st of stReqs) {
-    if (!req_st?.capacidad_gb) continue;
-    const cubre = stFicha.some(f => f.gb >= req_st.capacidad_gb && !(req_st.tipo === 'SSD' && f.tipo === 'HDD'));
-    if (cubre) {
-      stScore += Math.round(20 / stReqs.length);
-    } else {
-      const mejor = stFicha.reduce((mx, f) => f.gb > mx ? f.gb : mx, 0);
-      if (mejor > 0) stScore += Math.round((mejor / req_st.capacidad_gb) * (10 / stReqs.length));
+  if (stReqs.length > 0 && stFichas.length > 0) {
+    let stScore = 0;
+    for (const reqSt of stReqs) {
+      if (!reqSt?.capacidad_gb) continue;
+      const cubre = stFichas.some(f => {
+        if (f.gb < reqSt.capacidad_gb * 0.9) return false;
+        if (reqSt.tipo === 'NVMe SSD' && f.tipo === 'HDD') return false;
+        if (reqSt.tipo === 'SSD' && f.tipo === 'HDD') return false;
+        return true;
+      });
+      if (cubre) stScore += Math.round(20 / stReqs.length);
     }
+    score += Math.min(stScore, 20);
+  } else {
+    score += 15;
   }
-  score += Math.min(stScore, 20);
 
-  // ══════════════════════════════════════════
-  // GRÁFICA (10 puntos)
-  // ══════════════════════════════════════════
+  // ════════════════════════════════════════
+  // GRÁFICA (15 pts) — SOLO disponible desde PDF
+  // ════════════════════════════════════════
   const grafReq   = req.grafica?.tipo;
-  const grafFicha = pdf.grafica_tipo || (hayHtml.includes('integrad') ? 'integrada' : null);
+  const grafFicha = pdf.grafica_tipo;
 
-  if (!grafReq || grafReq === 'integrada' || req.grafica?.opcional_dedicada) {
-    score += 10;
-  } else if (grafReq === 'dedicada' && grafFicha === 'dedicada') {
-    const vramReq   = req.grafica?.vram_gb || 0;
-    const vramFicha = pdf.grafica_vram_gb  || gbDesdeTexto(hayHtml.match(/(\d+)\s*gb\s*(gddr|vram)/i)?.[0] || '');
-    score += vramFicha >= vramReq ? 10 : 5;
+  if (!grafFicha) {
+    score += 8; // Sin info del PDF → no penalizar
+  } else if (!grafReq || grafReq === 'integrada' || req.grafica?.opcional_dedicada) {
+    score += 15;
+  } else if (grafReq === 'dedicada') {
+    if (grafFicha === 'dedicada') {
+      const vramReq   = req.grafica?.vram_gb || 0;
+      const vramFicha = pdf.grafica_vram_gb  || 0;
+      if (vramReq === 0 || vramFicha >= vramReq) score += 15;
+      else if (vramFicha >= vramReq / 2) score += 8;
+      else score += 3;
+    }
+    // integrada cuando piden dedicada → 0 pts
   }
 
-  // ══════════════════════════════════════════
-  // SISTEMA OPERATIVO (10 puntos)
-  // ══════════════════════════════════════════
+  // ════════════════════════════════════════
+  // SISTEMA OPERATIVO (10 pts)
+  // ════════════════════════════════════════
   const soReq   = (req.sistema_operativo || '').toLowerCase();
-  const soFicha = (pdf.so_texto || hayHtml).toLowerCase();
-  if (soReq.includes('windows') && soFicha.includes('windows')) {
+  const soFicha = (pdf.so || fp.so_fp || html).toLowerCase();
+
+  if (!soReq || soReq.length < 3) {
     score += 7;
-    if      (soReq.includes('11') && soFicha.includes('11')) score += 3;
-    else if (soReq.includes('10') && soFicha.includes('10')) score += 2;
+  } else if (soReq.includes('windows') && soFicha.includes('windows')) {
+    score += 7;
+    if (soReq.includes('11') && soFicha.includes('11')) score += 3;
+    else if (soReq.includes('11') && soFicha.includes('10')) score += 0;
+    else score += 2;
   }
-
-  // ══════════════════════════════════════════
-  // CONECTIVIDAD (5 puntos)
-  // ══════════════════════════════════════════
-  const conn = req.conectividad || {};
-  if (conn.lan  === true && hayHtml.includes('lan: si'))  score += 2;
-  if (conn.hdmi === true && hayHtml.includes('hdmi: si')) score += 2;
-  if (conn.usb  === true && hayHtml.includes('usb: si'))  score += 1;
-
-  // ══════════════════════════════════════════
-  // GARANTÍA (5 puntos bonus)
-  // ══════════════════════════════════════════
-  const garMin   = req.garantia_min_meses || 0;
-  const garFicha = pdf.garantia_meses     || 0;
-  if (garFicha >= garMin && garMin > 0) score += 5;
-
-  // Ofertada bonus
-  if ((ficha.estado || '').toLowerCase() === 'ofertada') score += 3;
 
   return Math.min(Math.round(score), 100);
 };
