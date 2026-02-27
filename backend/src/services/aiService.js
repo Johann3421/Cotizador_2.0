@@ -222,21 +222,45 @@ function parseAIResponse(content) {
   // Remover ```json ... ``` o ``` ... ```
   cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
   cleaned = cleaned.trim();
+  // Quitar comillas invertidas simples y encabezados tipo "JSON:" o "Respuesta:"
+  cleaned = cleaned.replace(/^\s*JSON[:\s]*/i, '').replace(/^\s*Respuesta[:\s]*/i, '');
+  cleaned = cleaned.replace(/^[`\-\s>]+/gm, '').trim();
 
+  // Intentar parseo directo
   try {
-    const parsed = JSON.parse(cleaned);
-    return parsed;
+    return JSON.parse(cleaned);
   } catch (e) {
-    // Intentar encontrar JSON dentro del texto
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      try {
-        return JSON.parse(jsonMatch[0]);
-      } catch (e2) {
-        console.error('No se pudo parsear la respuesta de la AI:', cleaned.substring(0, 200));
-        throw new Error('La AI no retornó un JSON válido. Intenta con otra imagen.');
+    // Intentar extraer el bloque JSON más grande mediante búsqueda de llaves balanceadas
+    const firstBrace = cleaned.indexOf('{');
+    if (firstBrace !== -1) {
+      let depth = 0;
+      for (let i = firstBrace; i < cleaned.length; i++) {
+        const ch = cleaned[i];
+        if (ch === '{') depth++;
+        else if (ch === '}') depth--;
+        if (depth === 0) {
+          const candidate = cleaned.slice(firstBrace, i + 1);
+          try {
+            return JSON.parse(candidate);
+          } catch (e2) {
+            // continue searching
+          }
+        }
       }
     }
+
+    // Intentar encontrar un array JSON completo
+    const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+    if (arrayMatch) {
+      try {
+        return JSON.parse(arrayMatch[0]);
+      } catch (e3) {
+        // fallthrough
+      }
+    }
+
+    // Loguear la respuesta cruda para diagnóstico
+    console.error('No se pudo parsear la respuesta de la AI. Contenido (truncado 1000):', cleaned.substring(0, 1000));
     throw new Error('La AI no retornó un JSON válido. Intenta con otra imagen.');
   }
 }
