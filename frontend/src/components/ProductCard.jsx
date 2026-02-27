@@ -27,15 +27,25 @@ function ScoreBar({ score }) {
   );
 }
 
-function SpecCheck({ label, matches }) {
+function SpecCheck({ label, status = 'miss', details = '' }) {
+  // status: 'ok' | 'better' | 'miss' | 'partial'
+  const icon = status === 'ok' ? (
+    <Check className="w-3.5 h-3.5 text-green-500 shrink-0" />
+  ) : status === 'better' || status === 'partial' ? (
+    <Check className="w-3.5 h-3.5 text-yellow-500 shrink-0" />
+  ) : (
+    <X className="w-3.5 h-3.5 text-red-400 shrink-0" />
+  );
+
+  const textClass = status === 'ok' ? 'text-green-700' : status === 'better' || status === 'partial' ? 'text-yellow-700' : 'text-gray-500';
+
   return (
-    <div className="flex items-center gap-1.5 text-xs">
-      {matches ? (
-        <Check className="w-3.5 h-3.5 text-green-500 shrink-0" />
-      ) : (
-        <X className="w-3.5 h-3.5 text-red-400 shrink-0" />
-      )}
-      <span className={matches ? 'text-green-700' : 'text-gray-500'}>{label}</span>
+    <div className="text-xs">
+      <div className="flex items-center gap-1.5">
+        {icon}
+        <span className={textClass}>{label}</span>
+      </div>
+      {details ? <div className="text-xs text-gray-400 mt-1 ml-6">{details}</div> : null}
     </div>
   );
 }
@@ -62,42 +72,89 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
   if (requerimiento?.memoria_ram?.capacidad_gb !== undefined) {
     const reqRamGb = parseInt(requerimiento.memoria_ram.capacidad_gb);
     const prodRamGb = pdfSpecs.ram_gb ? parseInt(pdfSpecs.ram_gb) : 0;
-    specChecks.push({ 
-      label: `RAM: ${reqRamGb}GB`, 
-      matches: prodRamGb >= reqRamGb 
-    });
+    let status = 'miss';
+    if (prodRamGb >= reqRamGb) status = prodRamGb > reqRamGb ? 'better' : 'ok';
+    specChecks.push({ label: `RAM: ${reqRamGb}GB`, status });
   }
   
   // GPU: comparar tipo (integrada vs dedicada)
-  if (requerimiento?.grafica?.tipo !== undefined) {
+  if (requerimiento?.grafica) {
     const reqGpuType = (requerimiento.grafica.tipo || '').toLowerCase();
+    const reqVram = parseInt(requerimiento.grafica?.vram_gb || 0);
     const prodGpuType = (pdfSpecs.grafica_tipo || '').toLowerCase();
-    specChecks.push({ 
-      label: `GPU: ${reqGpuType}`, 
-      matches: prodGpuType === reqGpuType 
-    });
+    const prodVram = parseInt(pdfSpecs.grafica_vram_gb || 0);
+    let status = 'miss';
+    if (!reqGpuType) status = 'ok';
+    else if (reqGpuType === 'integrada') {
+      // cualquier GPU cumple; dedicated is better
+      if (prodGpuType === 'dedicada') status = 'better';
+      else if (prodGpuType === 'integrada') status = 'ok';
+    } else if (reqGpuType === 'dedicada') {
+      if (prodGpuType === 'dedicada') {
+        if (prodVram >= reqVram && prodVram > reqVram) status = 'better';
+        else if (prodVram >= reqVram) status = 'ok';
+        else status = 'miss';
+      } else {
+        status = 'miss';
+      }
+    }
+    const label = reqVram > 0 ? `GPU: ${reqGpuType} ${reqVram ? reqVram + 'GB' : ''}` : `GPU: ${reqGpuType}`;
+    specChecks.push({ label, status, details: prodVram ? `Ficha: ${prodVram}GB ${prodGpuType}` : `Ficha: ${prodGpuType || 'sin info'}` });
   }
   
   // Almacenamiento: verificar que tenga capacidad suficiente (array structure)
+  // Almacenamiento: comparar lista de requerimientos vs unidades encontradas
   if (requerimiento?.almacenamiento && Array.isArray(requerimiento.almacenamiento) && requerimiento.almacenamiento.length > 0) {
-    const reqStorageGb = parseInt(requerimiento.almacenamiento[0]?.capacidad_gb) || 0;
-    const prodStorageGb = pdfSpecs.almacenamiento?.reduce((sum, u) => sum + (u.gb || 0), 0) || 0;
-    if (reqStorageGb > 0) {
-      specChecks.push({ 
-        label: `Almacenamiento: ${reqStorageGb}GB`, 
-        matches: prodStorageGb >= reqStorageGb 
-      });
+    const reqList = requerimiento.almacenamiento.map(r => ({ gb: parseInt(r.capacidad_gb || 0), tipo: (r.tipo || '').toLowerCase() }));
+    const prodList = (pdfSpecs.almacenamiento || []).map(p => ({ gb: parseInt(p.gb || 0), tipo: (p.tipo || '').toLowerCase() }));
+
+    // función orden tipo
+    const rankTipo = (t) => {
+      if (!t) return 0;
+      if (/nvme/i.test(t)) return 3;
+      if (/ssd/i.test(t)) return 2;
+      if (/hdd/i.test(t)) return 1;
+      return 0;
+    };
+
+    const used = new Array(prodList.length).fill(false);
+    let matched = 0;
+    let anyBetter = false;
+    const missing = [];
+
+    for (const req of reqList) {
+      let foundIndex = -1;
+      for (let i = 0; i < prodList.length; i++) {
+        if (used[i]) continue;
+        const p = prodList[i];
+        if (p.gb >= req.gb && rankTipo(p.tipo) >= rankTipo(req.tipo)) { foundIndex = i; break; }
+      }
+      if (foundIndex >= 0) {
+        used[foundIndex] = true; matched++;
+        const p = prodList[foundIndex];
+        if (p.gb > req.gb || rankTipo(p.tipo) > rankTipo(req.tipo)) anyBetter = true;
+      } else {
+        missing.push(`${req.gb}GB ${req.tipo || 'SSD/HDD'}`);
+      }
     }
+
+    let status = 'miss';
+    if (matched === reqList.length) status = anyBetter ? 'better' : 'ok';
+    else if (matched > 0) status = 'partial';
+
+    const label = `Almacenamiento: ${matched}/${reqList.length}`;
+    const details = missing.length > 0 ? `Faltan: ${missing.join(', ')}` : `Unidades: ${prodList.map(p => p.gb + 'GB').join(', ')}`;
+    specChecks.push({ label, status, details });
   }
   
-  // Procesador: comparar modelo si existe
+  // Procesador: comparar modelo si existe (simple fuzzy)
   if (requerimiento?.procesador?.modelo_principal) {
     const reqProc = (requerimiento.procesador.modelo_principal || '').toLowerCase();
     const prodProc = (pdfSpecs.procesador_modelo || '').toLowerCase();
-    specChecks.push({ 
-      label: `Proc: ${requerimiento.procesador.modelo_principal}`, 
-      matches: prodProc.includes(reqProc.split(' ')[0]) 
-    });
+    let status = 'miss';
+    if (prodProc.includes(reqProc)) status = 'ok';
+    else if (prodProc && reqProc && prodProc.split(' ').some(w => reqProc.includes(w) || w.includes(reqProc))) status = 'partial';
+    specChecks.push({ label: `Proc: ${requerimiento.procesador.modelo_principal}`, status });
   }
 
   return (
@@ -139,8 +196,8 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
       {specChecks.length > 0 && (
         <div className="mb-3 space-y-1">
           {specChecks.map((check, i) => (
-            <SpecCheck key={i} label={check.label} matches={check.matches} />
-          ))}
+            <SpecCheck key={i} label={check.label} status={check.status} details={check.details} />
+              ))}
         </div>
       )}
 
