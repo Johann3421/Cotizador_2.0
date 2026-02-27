@@ -259,12 +259,13 @@ const getStats = async (req, res) => {
       pool.query('SELECT COUNT(*) FROM products'),
     ]);
 
+    // Mapear a las claves que usa el frontend
     res.json({
-      total_usuarios:         parseInt(usuarios.rows[0].count),
-      usuarios_pendientes:    parseInt(pendientes.rows[0].count),
-      total_solicitudes:      parseInt(solicitudes.rows[0].count),
-      solicitudes_pendientes: parseInt(solicitudesPend.rows[0].count),
-      total_fichas_catalogo:  parseInt(fichas.rows[0].count),
+      activeUsers:     parseInt(usuarios.rows[0].count),       // usuarios activos (rol != 'pending')
+      pendingUsers:    parseInt(pendientes.rows[0].count),     // usuarios pendientes
+      totalRequests:   parseInt(solicitudes.rows[0].count),    // total de solicitudes
+      pendingRequests: parseInt(solicitudesPend.rows[0].count),// solicitudes con estado 'pendiente'
+      totalProducts:   parseInt(fichas.rows[0].count),         // total de fichas en catálogo
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
