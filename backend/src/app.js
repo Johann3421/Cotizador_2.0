@@ -154,7 +154,7 @@ async function startServer() {
 
       // Ejecutar seeders automáticamente en entornos de desarrollo
       try {
-        const runSeeds = require('../../scripts/seed').runSeeders;
+        const runSeeds = require('../scripts/seed').runSeeders;
         const forceRun = process.env.RUN_SEEDS === 'true';
         const isProdFlag = process.env.NODE_ENV === 'production' && !forceRun;
         if (!isProdFlag) {
