@@ -35,7 +35,7 @@ services:
       - PORT=3001
       - DATABASE_URL=postgresql://${DB_USER:-kenya}:${DB_PASSWORD:-kenya_secure_2024}@postgres:5432/${DB_NAME:-kenya_quotes}
       # ── Auth ──────────────────────────────────────────────────
-      - JWT_SECRET=${JWT_SECRET}
+      - JWT_SECRET=${JWT_SECRET:-1604b9ab06fa56f92c5d7625d3a0ec01fa086c6b4c2797d2490c58f947900d4278662f7209901d8c2f5590b35adbbc5c2f56c9efc2efffd38aeb1199118c6ec2}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
       - BCRYPT_ROUNDS=${BCRYPT_ROUNDS:-10}
       # ── App URLs ──────────────────────────────────────────────

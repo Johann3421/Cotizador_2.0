@@ -1,10 +1,14 @@
 require('dotenv').config();
 
-// ── Variables críticas — fallar rápido si faltan ──────────────
+// ── Variables críticas — advertir si falta JWT_SECRET ──────────
 if (!process.env.JWT_SECRET) {
-  console.error('❌ FATAL: JWT_SECRET no está definido en las variables de entorno.');
-  console.error('   Genera uno con: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
-  process.exit(1);
+  const crypto = require('crypto');
+  const generated = crypto.randomBytes(64).toString('hex');
+  process.env.JWT_SECRET = generated;
+  console.warn('⚠️  JWT_SECRET no está definido — usando secreto temporal generado automáticamente.');
+  console.warn('   Los tokens NO persistirán entre reinicios del servidor.');
+  console.warn('   ➜ Configura JWT_SECRET en tus variables de entorno (Dokploy/Docker).');
+  console.warn(`   ➜ Valor sugerido: ${generated}`);
 }
 
 const express = require('express');
