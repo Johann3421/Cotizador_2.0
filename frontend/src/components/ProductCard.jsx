@@ -271,7 +271,7 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
       </h4>
       {/* Número de parte (si existe) */}
       {(() => {
-        const partNumber = product.numero_parte || product.part_number || product.part || product.partNo || product.partno || product.parte;
+        const partNumber = product.numeroParte || product.numero_parte || product.part_number || product.partNumber || product.part || product.partNo || product.partno || product.parte;
         return partNumber ? <div className="text-xs text-gray-500 mb-2">N° de parte: {partNumber}</div> : null;
       })()}
 
