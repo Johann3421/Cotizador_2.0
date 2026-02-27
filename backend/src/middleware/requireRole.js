@@ -20,4 +20,4 @@ const requireRole = (...rolesPermitidos) => {
   };
 };
 
-module.exports = { requireRole };
+module.exports = requireRole;
