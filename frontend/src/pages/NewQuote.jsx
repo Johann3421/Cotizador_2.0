@@ -73,6 +73,10 @@ export default function NewQuote() {
     });
   };
 
+  const handleRemoveEquipo = (index) => {
+    setEquipos((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleSearch = async () => {
     setLoading(true);
     setError(null);
@@ -271,13 +275,22 @@ export default function NewQuote() {
           ) : (
             <div className="space-y-4">
               {equipos.map((equipo, index) => (
-                <RequirementCard
-                  key={index}
-                  equipo={equipo}
-                  index={index}
-                  onUpdate={handleUpdateEquipo}
-                  editable={true}
-                />
+                <div key={index} className="relative">
+                  <RequirementCard
+                    equipo={equipo}
+                    index={index}
+                    onUpdate={handleUpdateEquipo}
+                    editable={true}
+                  />
+                  <button
+                    onClick={() => handleRemoveEquipo(index)}
+                    className="absolute top-3 right-3 text-xs text-red-600 hover:underline"
+                    aria-label={`Eliminar ficha ${index + 1}`}
+                    title="Eliminar ficha"
+                  >
+                    Eliminar
+                  </button>
+                </div>
               ))}
             </div>
           )}
