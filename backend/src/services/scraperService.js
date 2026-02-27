@@ -345,44 +345,132 @@ const parsearDataFp = (dataFp) => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// JERARQUÍA DE PROCESADORES para comparación numérica
+// TIER SCORES — cuánto vale cada familia de CPU
 // ─────────────────────────────────────────────────────────────
-const getProcScore = (modeloFicha, modelosRequeridos, genFicha, genReq) => {
-  const mf = (modeloFicha || '').toLowerCase().replace(/\s+/g, ' ');
+const TIER_SCORE = {
+  // Intel Core Ultra (desktop: Series 2 = Arrow Lake 2024)
+  'ultra 9': 10, 'ultra 7': 8, 'ultra 5': 6,
+  // Intel Core clásico (hasta 14th gen, no existe 15th+)
+  'i9': 9, 'i7': 7, 'i5': 5, 'i3': 3,
+  // AMD
+  'ryzen 9': 9, 'ryzen 7': 7, 'ryzen 5': 5, 'ryzen 3': 3,
+};
 
-  for (const modReq of modelosRequeridos) {
-    const mr = (modReq || '').toLowerCase().replace(/\s+/g, ' ');
-    if (!mr) continue;
+/**
+ * Extrae generación y tier de un procesador.
+ * rawGen:
+ *   Intel clásico (12th-14th)  → rawGen = gen (12, 13, 14)
+ *   Core Ultra Series 1 (100)  → rawGen = 15
+ *   Core Ultra Series 2 (200)  → rawGen = 16
+ *   AMD                        → rawGen = serie (5=Zen3, 7=Zen4, 8=Zen4+)
+ */
+const parsearProcesador = (texto) => {
+  if (!texto) return null;
+  const t = texto.toLowerCase()
+    .replace(/[®™°ªfk]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-    if (mf.includes(mr)) return 30;
-
-    const numReq   = mr.match(/[i][3579]-?(\d{4,5})/)?.[1];
-    const numFicha = mf.match(/[i][3579]-?(\d{4,5})/)?.[1];
-    if (numReq && numFicha) {
-      if (parseInt(numFicha) >= parseInt(numReq)) return 28;
-      if (parseInt(numFicha) >= parseInt(numReq) - 100) return 20;
-    }
-
-    if (mr.includes('ultra') && mf.includes('ultra')) return 28;
-    if (mr.includes('ultra') && (mf.includes('i9') || mf.includes('i7-14'))) return 25;
-
-    const famReq   = mr.match(/(i[3579]|ultra [579]|ryzen [3579])/)?.[1];
-    const famFicha = mf.match(/(i[3579]|ultra [579]|ryzen [3579])/)?.[1];
-    if (famReq && famFicha) {
-      if (famFicha === famReq) {
-        if (genFicha && genReq) {
-          if (genFicha >= genReq) return 25;
-          if (genFicha === genReq - 1) return 18;
-          return 10;
-        }
-        return 22;
-      }
-      const ORDEN = { 'i9': 5, 'i7': 4, 'i5': 3, 'i3': 2, 'ultra 9': 7, 'ultra 7': 6, 'ultra 5': 5 };
-      if ((ORDEN[famFicha] || 0) > (ORDEN[famReq] || 0)) return 25;
-      if ((ORDEN[famFicha] || 0) === (ORDEN[famReq] || 0)) return 20;
-    }
+  // ── Intel Core Ultra (Arrow Lake S2, Meteor Lake S1) ──────
+  // "Core Ultra 5 245K", "Core Ultra 7 265K", "Ultra 5 125H"
+  const ultraMatch = t.match(/(?:core\s+)?ultra\s+([579])\s+(\d{3})\w*/);
+  if (ultraMatch) {
+    const tierNum   = parseInt(ultraMatch[1]);            // 5, 7 o 9
+    const numModelo = parseInt(ultraMatch[2]);            // 245, 265, 125…
+    const series    = numModelo >= 200 ? 2 : 1;
+    const tier      = `ultra ${tierNum}`;
+    const rawGen    = series === 2 ? 16 : 15;            // S2=16, S1=15
+    return { gen: rawGen, tier, tierScore: TIER_SCORE[tier] || 6, rawGen };
   }
-  return 0;
+
+  // ── Intel Core clásico (12th – 14th gen) ──────────────────
+  // "Core i7-13700", "Core i5-14400", "i9-14900K"
+  const intelMatch = t.match(/(?:core\s+)?([i][3579])-?(\d{2})(\d{2,3})/);
+  if (intelMatch) {
+    const tier = intelMatch[1];                          // 'i3','i5','i7','i9'
+    const gen  = parseInt(intelMatch[2]);                // 12, 13, 14
+    return { gen, tier, tierScore: TIER_SCORE[tier] || 0, rawGen: gen };
+  }
+
+  // ── AMD Ryzen ──────────────────────────────────────────────
+  // "Ryzen 5 5600", "Ryzen 7 8700G", "Ryzen 9 7950X"
+  const amdMatch = t.match(/ryzen\s+([3579])\s+(\d)(\d{3})\w*/);
+  if (amdMatch) {
+    const tierNum = parseInt(amdMatch[1]);               // 3, 5, 7, 9
+    const genNum  = parseInt(amdMatch[2]);               // 5=Zen3, 7=Zen4, 8=Zen4+
+    const tier    = `ryzen ${tierNum}`;
+    return { gen: genNum, tier, tierScore: TIER_SCORE[tier] || 0, rawGen: genNum };
+  }
+
+  return null;
+};
+
+/**
+ * Compara procesador de la ficha vs lista de modelos requeridos.
+ * Retorna score 0-30.
+ *
+ * rawGen ficha < req               → 0   (generación inferior, descartar)
+ * rawGen ficha == req, tier igual  → 25
+ * rawGen ficha == req, tier +1     → 26
+ * rawGen ficha == req, tier +2+    → 28
+ * rawGen ficha == req, tier menor  → 0   (inferior, descartar)
+ * rawGen ficha >  req, tier >=     → 29-30
+ * rawGen ficha >  req, tier -1     → 15-20 (gen compensa uno)
+ * rawGen ficha >  req, tier -2+    → 0
+ * Sin info / arq diferente         → neutral (10-20)
+ */
+const getProcScore = (fichaTexto, _genFromPdf, modelos_req) => {
+  const fichaParsed = parsearProcesador(fichaTexto);
+  if (!fichaParsed) return 10;   // sin info → neutral
+
+  const reqs = modelos_req.map(m => parsearProcesador(m)).filter(Boolean);
+  if (reqs.length === 0) return 20; // sin requisito → no penalizar
+
+  // Si la arquitectura es totalmente distinta (Intel vs AMD) → neutral
+  const fichaEsIntel = fichaParsed.tier.startsWith('i') || fichaParsed.tier.startsWith('ultra');
+  const fichaEsAmd   = fichaParsed.tier.startsWith('ryzen');
+
+  let mejorScore = 0;
+
+  for (const req of reqs) {
+    const reqEsIntel = req.tier.startsWith('i') || req.tier.startsWith('ultra');
+    const reqEsAmd   = req.tier.startsWith('ryzen');
+
+    // Arquitecturas distintas → neutral (no penalizar ni premiar)
+    if ((fichaEsIntel && reqEsAmd) || (fichaEsAmd && reqEsIntel)) {
+      mejorScore = Math.max(mejorScore, 10);
+      continue;
+    }
+
+    const genFicha = fichaParsed.rawGen;
+    const genReq   = req.rawGen;
+    const diffTier = fichaParsed.tierScore - req.tierScore;
+    let s = 0;
+
+    if (genFicha < genReq) {
+      // ❌ Generación inferior → descarte absoluto
+      s = 0;
+
+    } else if (genFicha === genReq) {
+      // Misma generación → tier decide
+      if (diffTier >= 2)        s = 28;  // tier mucho mayor (i9 vs i5)
+      else if (diffTier === 1)  s = 26;  // tier un escalón mayor (i7 vs i5)
+      else if (diffTier === 0)  s = 25;  // tier exactamente igual
+      else                      s = 0;   // tier menor → descartar
+
+    } else {
+      // Generación superior → más permisivo con tier
+      const genDiff = genFicha - genReq;
+      if (diffTier >= 1)       s = 30;                           // gen mayor Y tier mayor
+      else if (diffTier === 0) s = 29;                           // gen mayor, tier igual
+      else if (diffTier === -1) s = genDiff >= 2 ? 20 : 15;     // tier -1 pero gen 2+
+      else                     s = 0;                            // tier muy inferior
+    }
+
+    mejorScore = Math.max(mejorScore, s);
+  }
+
+  return mejorScore;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -403,12 +491,7 @@ const calcularScore = (ficha, req) => {
     [req.procesador?.modelo_principal, req.procesador?.modelo].filter(Boolean));
 
   const modeloFicha = pdf.procesador_modelo || fp.procesador_fp || '';
-  const genFicha    = pdf.procesador_generacion || 0;
-  const genReq = (() => {
-    const m = (modelos_req[0] || '').match(/[iI][3579]-?(\d{2})\d{3}/);
-    return m ? parseInt(m[1]) : 0;
-  })();
-  score += getProcScore(modeloFicha, modelos_req, genFicha, genReq);
+  score += getProcScore(modeloFicha, pdf.procesador_generacion || 0, modelos_req);
 
   // ════════════════════════════════════════
   // RAM (25 pts)
