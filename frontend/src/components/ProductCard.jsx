@@ -49,30 +49,55 @@ const BRAND_STYLES = {
 export default function ProductCard({ product, requerimiento, onSelect, selected }) {
   const marca = (product.marca || 'otra').toLowerCase();
   const styles = BRAND_STYLES[marca] || { bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-700', badge: 'bg-gray-600' };
-  const specs = typeof product.specs === 'string' ? JSON.parse(product.specs) : (product.specs || product.parsed_specs || {});
+  
+  // Usar specs del PDF extraído → pdfSpecs.specs
+  const pdfSpecs = product.pdfSpecs?.specs || {};
   const score = product.score ?? 50;
 
-  // Verificar specs contra requerimiento
+  // Comparar specs reales extraídas del PDF con el requerimiento
+  // El requerimiento viene del AIService con estructura: memoria_ram.capacidad_gb, grafica.tipo, etc.
   const specChecks = [];
-  if (requerimiento?.procesador?.modelo) {
-    const reqProc = (requerimiento.procesador.modelo || '').toLowerCase();
-    const prodProc = JSON.stringify(specs.procesador || {}).toLowerCase();
-    specChecks.push({ label: `Proc: ${requerimiento.procesador.modelo}`, matches: prodProc.includes(reqProc.split(' ')[0]) });
+  
+  // RAM: comparar capacidad (de estructura anidada de AIService)
+  if (requerimiento?.memoria_ram?.capacidad_gb !== undefined) {
+    const reqRamGb = parseInt(requerimiento.memoria_ram.capacidad_gb);
+    const prodRamGb = pdfSpecs.ram_gb ? parseInt(pdfSpecs.ram_gb) : 0;
+    specChecks.push({ 
+      label: `RAM: ${reqRamGb}GB`, 
+      matches: prodRamGb >= reqRamGb 
+    });
   }
-  if (requerimiento?.memoria_ram?.capacidad_gb) {
-    const prodRam = parseInt(specs.memoria_ram?.capacidad_gb) || 0;
-    specChecks.push({ label: `RAM: ${requerimiento.memoria_ram.capacidad_gb}GB`, matches: prodRam >= requerimiento.memoria_ram.capacidad_gb });
+  
+  // GPU: comparar tipo (integrada vs dedicada)
+  if (requerimiento?.grafica?.tipo !== undefined) {
+    const reqGpuType = (requerimiento.grafica.tipo || '').toLowerCase();
+    const prodGpuType = (pdfSpecs.grafica_tipo || '').toLowerCase();
+    specChecks.push({ 
+      label: `GPU: ${reqGpuType}`, 
+      matches: prodGpuType === reqGpuType 
+    });
   }
-  if (requerimiento?.almacenamiento?.capacidad_gb) {
-    const prodStorage = parseInt(specs.almacenamiento?.capacidad_gb) || 0;
-    specChecks.push({ label: `Alm: ${requerimiento.almacenamiento.capacidad_gb}GB`, matches: prodStorage >= requerimiento.almacenamiento.capacidad_gb });
+  
+  // Almacenamiento: verificar que tenga capacidad suficiente (array structure)
+  if (requerimiento?.almacenamiento && Array.isArray(requerimiento.almacenamiento) && requerimiento.almacenamiento.length > 0) {
+    const reqStorageGb = parseInt(requerimiento.almacenamiento[0]?.capacidad_gb) || 0;
+    const prodStorageGb = pdfSpecs.almacenamiento?.reduce((sum, u) => sum + (u.gb || 0), 0) || 0;
+    if (reqStorageGb > 0) {
+      specChecks.push({ 
+        label: `Almacenamiento: ${reqStorageGb}GB`, 
+        matches: prodStorageGb >= reqStorageGb 
+      });
+    }
   }
-  if (requerimiento?.grafica?.tipo) {
-    specChecks.push({ label: `GPU: ${requerimiento.grafica.tipo}`, matches: (specs.grafica?.tipo || '').toLowerCase() === requerimiento.grafica.tipo.toLowerCase() });
-  }
-  if (requerimiento?.pantalla?.pulgadas) {
-    const prodScreen = parseFloat(specs.pantalla?.pulgadas) || 0;
-    specChecks.push({ label: `Pantalla: ${requerimiento.pantalla.pulgadas}"`, matches: Math.abs(prodScreen - requerimiento.pantalla.pulgadas) <= 1 });
+  
+  // Procesador: comparar modelo si existe
+  if (requerimiento?.procesador?.modelo_principal) {
+    const reqProc = (requerimiento.procesador.modelo_principal || '').toLowerCase();
+    const prodProc = (pdfSpecs.procesador_modelo || '').toLowerCase();
+    specChecks.push({ 
+      label: `Proc: ${requerimiento.procesador.modelo_principal}`, 
+      matches: prodProc.includes(reqProc.split(' ')[0]) 
+    });
   }
 
   return (
