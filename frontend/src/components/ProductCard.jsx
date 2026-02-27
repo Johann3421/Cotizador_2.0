@@ -272,7 +272,12 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
       {/* Número de parte (si existe) */}
       {(() => {
         const partNumber = product.numeroParte || product.numero_parte || product.part_number || product.partNumber || product.part || product.partNo || product.partno || product.parte;
-        return partNumber ? <div className="text-xs text-gray-500 mb-2">N° de parte: {partNumber}</div> : null;
+        return partNumber ? (
+          <div className="text-sm text-gray-700 mb-2 font-medium">
+            <span className="text-gray-500">N° de parte: </span>
+            <span className="font-mono">{partNumber}</span>
+          </div>
+        ) : null;
       })()}
 
       {/* Score bar */}
