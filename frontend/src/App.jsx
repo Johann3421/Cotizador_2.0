@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, useNavigate, Link } from 'react-router-dom';
 import { FileText, LogOut, Shield } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ToastProvider } from './components/Toast';
 import ProtectedRoute from './components/ProtectedRoute';
 import NotificationBell from './components/NotificationBell';
 import Home from './pages/Home';
@@ -39,7 +40,7 @@ function Layout({ children }) {
                 <p className="text-[10px] text-gray-400 leading-none mt-0.5">Cotización Inteligente</p>
               </div>
             </Link>
-            
+
             <div className="flex items-center gap-3">
               {user ? (
                 <>
@@ -98,53 +99,55 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Routes>
-          {/* Auth pages (no layout) */}
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/pending-approval" element={<PendingApproval />} />
+        <ToastProvider>
+          <Routes>
+            {/* Auth pages (no layout) */}
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/pending-approval" element={<PendingApproval />} />
 
-          {/* Admin panel (own layout) */}
-          <Route
-            path="/admin"
-            element={
-              <ProtectedRoute requireAdmin>
-                <AdminDashboard />
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<DashboardIndex />} />
-            <Route path="users" element={<UserManagement />} />
-            <Route path="quote-requests" element={<QuoteRequests />} />
-            <Route path="catalog" element={<CatalogManager />} />
-          </Route>
+            {/* Admin panel (own layout) */}
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminDashboard />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<DashboardIndex />} />
+              <Route path="users" element={<UserManagement />} />
+              <Route path="quote-requests" element={<QuoteRequests />} />
+              <Route path="catalog" element={<CatalogManager />} />
+            </Route>
 
-          {/* Main app (shared layout) */}
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <Layout><Home /></Layout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/new"
-            element={
-              <ProtectedRoute>
-                <Layout><NewQuote /></Layout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/quote/:id"
-            element={
-              <ProtectedRoute>
-                <Layout><History /></Layout>
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
+            {/* Main app (shared layout) */}
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <Layout><Home /></Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/new"
+              element={
+                <ProtectedRoute>
+                  <Layout><NewQuote /></Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/quote/:id"
+              element={
+                <ProtectedRoute>
+                  <Layout><History /></Layout>
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </ToastProvider>
       </AuthProvider>
     </BrowserRouter>
   );

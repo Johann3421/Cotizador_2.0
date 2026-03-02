@@ -1,9 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, FileText, Search, Trash2, Eye, Download, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, FileText, Search, Trash2, Eye, Download, ChevronLeft, ChevronRight, Sparkles, TrendingUp, Clock } from 'lucide-react';
 import { listQuotes, deleteQuote, getQuotePDFUrl } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../components/Toast';
 
 export default function Home() {
+  const { user } = useAuth();
+  const toast = useToast();
   const [quotes, setQuotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -40,9 +44,10 @@ export default function Home() {
     if (!confirm(`¿Eliminar cotización ${numero}?`)) return;
     try {
       await deleteQuote(id);
+      toast.success(`Cotización ${numero} eliminada`);
       fetchQuotes();
     } catch (error) {
-      alert('Error al eliminar: ' + error.message);
+      toast.error('Error al eliminar: ' + error.message);
     }
   };
 
@@ -57,6 +62,17 @@ export default function Home() {
     });
   };
 
+  const getRelativeDate = (dateStr) => {
+    const now = new Date();
+    const date = new Date(dateStr);
+    const diffMs = now - date;
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    if (diffDays === 0) return 'Hoy';
+    if (diffDays === 1) return 'Ayer';
+    if (diffDays < 7) return `Hace ${diffDays} días`;
+    return formatDate(dateStr);
+  };
+
   const estadoBadge = (estado) => {
     const styles = {
       borrador: 'badge-yellow',
@@ -66,24 +82,59 @@ export default function Home() {
     return styles[estado] || 'badge-gray';
   };
 
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Buenos días';
+    if (hour < 18) return 'Buenas tardes';
+    return 'Buenas noches';
+  };
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Cotizaciones</h1>
-          <p className="text-gray-500 text-sm mt-1">
-            {total} cotización{total !== 1 ? 'es' : ''} en total
-          </p>
+      {/* Welcome Banner */}
+      <div className="welcome-banner animate-fade-in">
+        <div className="welcome-banner-content">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold">
+                {getGreeting()}, {user?.nombre?.split(' ')[0] || 'Usuario'} 👋
+              </h1>
+              <p className="text-red-200 text-sm mt-1">
+                Sistema de Cotización Inteligente — Kenya Distribuidora
+              </p>
+            </div>
+            <Link to="/new" className="bg-white text-kenya-600 px-5 py-2.5 rounded-lg font-semibold text-sm hover:bg-red-50 transition-all shadow-lg hover:shadow-xl active:scale-[0.98] flex items-center gap-2">
+              <Sparkles className="w-4 h-4" />
+              Nueva Cotización
+            </Link>
+          </div>
+
+          {/* Quick stats */}
+          {total > 0 && (
+            <div className="flex items-center gap-6 mt-4 pt-4 border-t border-red-500/30">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-red-300" />
+                <span className="text-sm text-red-100">{total} cotización{total !== 1 ? 'es' : ''}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-red-300" />
+                <span className="text-sm text-red-100">
+                  {quotes.filter(q => q.estado === 'aprobada').length} aprobada{quotes.filter(q => q.estado === 'aprobada').length !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-red-300" />
+                <span className="text-sm text-red-100">
+                  {quotes.filter(q => q.estado === 'borrador').length} en borrador
+                </span>
+              </div>
+            </div>
+          )}
         </div>
-        <Link to="/new" className="btn-primary flex items-center gap-2">
-          <Plus className="w-5 h-5" />
-          Nueva Cotización
-        </Link>
       </div>
 
       {/* Filters */}
-      <div className="card">
+      <div className="card animate-fade-in" style={{ animationDelay: '100ms' }}>
         <div className="flex flex-col sm:flex-row gap-3">
           <form onSubmit={handleSearch} className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -109,22 +160,28 @@ export default function Home() {
       </div>
 
       {/* Table */}
-      <div className="card p-0 overflow-hidden">
+      <div className="card p-0 overflow-hidden animate-fade-in" style={{ animationDelay: '200ms' }}>
         {loading ? (
           <div className="p-12 text-center text-gray-400">
-            <svg className="animate-spin h-8 w-8 mx-auto mb-3 text-kenya-500" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            Cargando cotizaciones...
+            <div className="relative w-16 h-16 mx-auto mb-4">
+              <div className="absolute inset-0 rounded-full border-4 border-gray-200"></div>
+              <div className="absolute inset-0 rounded-full border-4 border-kenya-500 border-t-transparent animate-spin"></div>
+            </div>
+            <p className="font-medium text-gray-500">Cargando cotizaciones...</p>
+            <p className="text-sm text-gray-400 mt-1">Un momento por favor</p>
           </div>
         ) : quotes.length === 0 ? (
-          <div className="p-12 text-center">
-            <FileText className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500 font-medium">No hay cotizaciones</p>
-            <p className="text-gray-400 text-sm mt-1">Crea tu primera cotización para comenzar</p>
-            <Link to="/new" className="btn-primary inline-flex items-center gap-2 mt-4">
-              <Plus className="w-4 h-4" /> Nueva Cotización
+          <div className="empty-state">
+            <div className="empty-state-icon">
+              <FileText className="w-10 h-10 text-kenya-400" />
+            </div>
+            <p className="text-lg font-semibold text-gray-700 mb-1">No hay cotizaciones</p>
+            <p className="text-gray-400 text-sm max-w-xs mx-auto">
+              Crea tu primera cotización inteligente. Solo necesitas una imagen del requerimiento y la IA hará el resto.
+            </p>
+            <Link to="/new" className="btn-primary inline-flex items-center gap-2 mt-5">
+              <Sparkles className="w-4 h-4" />
+              Crear Primera Cotización
             </Link>
           </div>
         ) : (
@@ -142,8 +199,12 @@ export default function Home() {
                   </tr>
                 </thead>
                 <tbody>
-                  {quotes.map((quote) => (
-                    <tr key={quote.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                  {quotes.map((quote, index) => (
+                    <tr
+                      key={quote.id}
+                      className="border-b border-gray-100 hover:bg-gray-50 transition-colors animate-fade-in"
+                      style={{ animationDelay: `${index * 50}ms` }}
+                    >
                       <td className="py-3 px-4">
                         <span className="font-mono text-sm font-medium text-kenya-600">{quote.numero_cotizacion}</span>
                       </td>
@@ -151,8 +212,11 @@ export default function Home() {
                         <p className="text-sm font-medium text-gray-800">{quote.cliente || '—'}</p>
                         {quote.ruc && <p className="text-xs text-gray-400">RUC: {quote.ruc}</p>}
                       </td>
-                      <td className="py-3 px-4 text-sm text-gray-500">{formatDate(quote.created_at)}</td>
-                      <td className="py-3 px-4 text-sm text-right font-medium text-gray-800">{formatCurrency(quote.total)}</td>
+                      <td className="py-3 px-4">
+                        <p className="text-sm text-gray-700">{getRelativeDate(quote.created_at)}</p>
+                        <p className="text-[11px] text-gray-400">{formatDate(quote.created_at)}</p>
+                      </td>
+                      <td className="py-3 px-4 text-sm text-right font-semibold text-gray-800">{formatCurrency(quote.total)}</td>
                       <td className="py-3 px-4 text-center">
                         <span className={`badge ${estadoBadge(quote.estado)}`}>
                           {(quote.estado || 'borrador').toUpperCase()}
@@ -195,20 +259,20 @@ export default function Home() {
             {totalPages > 1 && (
               <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200">
                 <p className="text-sm text-gray-500">
-                  Página {page} de {totalPages}
+                  Página {page} de {totalPages} · {total} resultado{total !== 1 ? 's' : ''}
                 </p>
                 <div className="flex gap-1">
                   <button
                     onClick={() => setPage(Math.max(1, page - 1))}
                     disabled={page === 1}
-                    className="btn-ghost p-2"
+                    className="btn-ghost p-2 disabled:opacity-30"
                   >
                     <ChevronLeft className="w-4 h-4" />
                   </button>
                   <button
                     onClick={() => setPage(Math.min(totalPages, page + 1))}
                     disabled={page === totalPages}
-                    className="btn-ghost p-2"
+                    className="btn-ghost p-2 disabled:opacity-30"
                   >
                     <ChevronRight className="w-4 h-4" />
                   </button>
