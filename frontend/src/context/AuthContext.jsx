@@ -4,7 +4,7 @@ import { loginUser as apiLogin, registerUser as apiRegister, logoutUser as apiLo
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser]       = useState(null);
+  const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // ── Cargar sesión al montar ──
@@ -45,12 +45,13 @@ export function AuthProvider({ children }) {
   }, []);
 
   // ── Helpers ──
-  const isAdmin      = user?.rol === 'admin' || user?.rol === 'superadmin';
+  const isAdmin = user?.rol === 'admin' || user?.rol === 'superadmin';
   const isSuperAdmin = user?.rol === 'superadmin';
-  const isPending    = user?.rol === 'pending';
+  const isPending = user?.rol === 'pending';
+  const isTrial = user?.rol === 'trial';
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, isAdmin, isSuperAdmin, isPending }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, isAdmin, isSuperAdmin, isPending, isTrial }}>
       {children}
     </AuthContext.Provider>
   );

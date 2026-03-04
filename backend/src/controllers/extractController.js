@@ -1,5 +1,7 @@
 const { extractSpecsFromImage } = require('../services/aiService');
 const Requirement = require('../models/Requirement');
+const { Pool } = require('pg');
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 /**
  * POST /api/extract
@@ -9,6 +11,15 @@ async function extractFromImage(req, res) {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No se recibió ninguna imagen. Envía un archivo en el campo "image".' });
+    }
+
+    if (req.user && req.user.rol === 'trial') {
+      const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress;
+      const ipCheck = await pool.query('SELECT * FROM trial_ips WHERE ip = $1', [clientIp]);
+      if (ipCheck.rows.length > 0) {
+        return res.status(403).json({ error: 'Has alcanzado el límite de 1 intento permitido para la cuenta de prueba.' });
+      }
+      await pool.query('INSERT INTO trial_ips (ip) VALUES ($1)', [clientIp]);
     }
 
     console.log(`[Extract] Procesando imagen: ${req.file.filename} (${req.file.mimetype})`);

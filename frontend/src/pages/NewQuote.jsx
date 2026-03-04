@@ -21,7 +21,7 @@ const STEPS = [
 
 export default function NewQuote() {
   const navigate = useNavigate();
-  const { isAdmin } = useAuth();
+  const { isAdmin, isTrial } = useAuth();
   const toast = useToast();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -164,12 +164,16 @@ export default function NewQuote() {
   // ============================================
   // STEP 3: Select products
   // ============================================
+  const getProductId = (product) => {
+    return product.ficha_id || product.id || product.numeroParte || product.numero_parte || product.part_number || product.nombre;
+  };
+
   const handleSelectProduct = (product) => {
     setSelectedProducts((prev) => {
-      const exists = prev.find((p) => (p.ficha_id || p.id) === (product.ficha_id || product.id));
+      const exists = prev.find((p) => getProductId(p) === getProductId(product));
       if (exists) {
         toast.info(`${product.nombre || 'Producto'} removido de la selección`);
-        return prev.filter((p) => (p.ficha_id || p.id) !== (product.ficha_id || product.id));
+        return prev.filter((p) => getProductId(p) !== getProductId(product));
       }
       toast.success(`${product.nombre || 'Producto'} agregado a la cotización`);
       return [...prev, product];
@@ -177,7 +181,7 @@ export default function NewQuote() {
   };
 
   const isProductSelected = (product) => {
-    return selectedProducts.some((p) => (p.ficha_id || p.id) === (product.ficha_id || product.id));
+    return selectedProducts.some((p) => getProductId(p) === getProductId(product));
   };
 
   const handleRefreshBrand = async (marca, tipo) => {
@@ -257,7 +261,31 @@ export default function NewQuote() {
   // RENDER
   // ============================================
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <div className={`max-w-5xl mx-auto space-y-6 ${isTrial ? 'trial-experience relative' : ''}`}>
+      {isTrial && (
+        <div className="absolute inset-0 bg-gradient-to-br from-indigo-50/50 via-purple-50/50 to-pink-50/50 -z-10 rounded-3xl opacity-50 blur-xl pointer-events-none" />
+      )}
+
+      {/* Trial Banner */}
+      {isTrial && step === 1 && (
+        <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 rounded-xl p-6 text-white shadow-xl animate-fade-in relative overflow-hidden">
+          <div className="absolute top-0 right-0 -mt-10 -mr-10 w-40 h-40 bg-white opacity-10 rounded-full blur-2xl"></div>
+          <div className="flex items-start gap-4 relative z-10">
+            <div className="p-3 bg-white/20 rounded-lg backdrop-blur-sm">
+              <Wand2 className="w-8 h-8 text-white" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold mb-1 flex items-center gap-2">
+                Bienvenido al Cotizador Inteligente <span className="text-xs px-2 py-1 bg-white/20 rounded-full uppercase tracking-wider">Modo Prueba</span>
+              </h2>
+              <p className="text-indigo-100 max-w-2xl">
+                Experimenta el poder de la Inteligencia Artificial extrayendo especificaciones automáticamente. Tienes <b className="text-white bg-white/20 px-1 rounded">1 intento</b> gratuito por IP. ¡Sube un requerimiento técnico y sorpréndete!
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Loading Overlays */}
       <LoadingOverlay type="extract" isVisible={loading && loadingType === 'extract'} />
       <LoadingOverlay type="search" isVisible={loading && loadingType === 'search'} />
@@ -335,9 +363,9 @@ export default function NewQuote() {
       {/* STEP 1: Upload Image */}
       {/* ============================================ */}
       {step === 1 && (
-        <div className="card space-y-6 step-transition">
+        <div className={`card space-y-6 step-transition ${isTrial ? 'border-indigo-100 shadow-indigo-100/50 ring-1 ring-indigo-50' : ''}`}>
           <div>
-            <h2 className="text-xl font-bold text-gray-800">Paso 1: Subir Imagen</h2>
+            <h2 className={`text-xl font-bold ${isTrial ? 'text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600' : 'text-gray-800'}`}>Paso 1: Subir Imagen</h2>
             <p className="text-gray-500 text-sm mt-1">
               Sube una imagen del requerimiento (correo, captura, documento) y la IA extraerá las especificaciones automáticamente.
             </p>
@@ -379,7 +407,7 @@ export default function NewQuote() {
             <button
               onClick={handleExtract}
               disabled={!file || loading}
-              className="btn-primary flex items-center gap-2"
+              className={`flex items-center gap-2 ${isTrial && file ? 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white px-6 py-2.5 rounded-lg shadow-lg hover:shadow-indigo-500/30 transition-all hover:-translate-y-0.5 font-medium' : 'btn-primary'}`}
             >
               {loading ? (
                 <>
@@ -388,7 +416,7 @@ export default function NewQuote() {
                 </>
               ) : (
                 <>
-                  <Wand2 className="w-4 h-4" />
+                  <Wand2 className={`w-4 h-4 ${isTrial ? 'animate-pulse' : ''}`} />
                   Extraer con IA
                 </>
               )}
@@ -577,7 +605,7 @@ export default function NewQuote() {
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {products.map((product, pIndex) => (
                       <ProductCard
-                        key={product.ficha_id || product.id || pIndex}
+                        key={getProductId(product) || pIndex}
                         product={product}
                         requerimiento={result.equipo}
                         onSelect={handleSelectProduct}

@@ -20,9 +20,9 @@ async function runSeeder(pool, name, fn) {
     try { await client.query('ROLLBACK'); } catch (e) { /* ignore */ }
     console.error(`\n❌ Error en [${name}]`);
     console.error(`   Mensaje:  ${err.message}`);
-    if (err.detail)  console.error(`   Detalle:  ${err.detail}`);
-    if (err.hint)    console.error(`   Hint:     ${err.hint}`);
-    if (err.code)    console.error(`   PG Code:  ${err.code}`);
+    if (err.detail) console.error(`   Detalle:  ${err.detail}`);
+    if (err.hint) console.error(`   Hint:     ${err.hint}`);
+    if (err.code) console.error(`   PG Code:  ${err.code}`);
     console.error(`   Stack:\n${err.stack}`);
     return false;
   } finally {
@@ -42,10 +42,13 @@ async function runSeeders(isProd = false) {
   // Seeder 1: Superadmin (siempre)
   results.push(await runSeeder(pool, '01_superadmin', require('./seeds/01_superadmin').run));
 
+  // Seeder 2: Trial User (siempre)
+  results.push(await runSeeder(pool, '02_trialuser', require('./seeds/02_trialuser').run));
+
   // Seeders de desarrollo (omitir con --prod)
   if (!isProd) {
     results.push(await runSeeder(pool, '02_test_users', require('./seeds/02_test_users').run));
-    results.push(await runSeeder(pool, '03_test_data',  require('./seeds/03_test_data').run));
+    results.push(await runSeeder(pool, '03_test_data', require('./seeds/03_test_data').run));
   }
 
   console.log('\n═══════════════════════════════════════════');

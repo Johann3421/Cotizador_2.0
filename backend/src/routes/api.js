@@ -15,7 +15,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 // ============================================
 
 // POST /api/extract - Subir imagen y extraer specs
-router.post('/extract', upload.single('image'), extractController.extractFromImage);
+router.post('/extract', verificarTokenOpcional, upload.single('image'), extractController.extractFromImage);
 
 // GET /api/requirements/:id - Obtener requerimiento
 router.get('/requirements/:id', extractController.getRequirement);
@@ -85,10 +85,10 @@ router.get('/admin/catalog-status', async (req, res) => {
       'SELECT * FROM catalog_sync_log ORDER BY sync_date DESC LIMIT 1'
     ).catch(() => ({ rows: [] }));
     res.json({
-      enProgreso:     isSyncEnProgreso(),
-      ultimoSync:     lastSync.rows[0] || null,
+      enProgreso: isSyncEnProgreso(),
+      ultimoSync: lastSync.rows[0] || null,
       fichasPorMarca: stats.rows,
-      totalFichas:    stats.rows.reduce((sum, r) => sum + parseInt(r.total), 0),
+      totalFichas: stats.rows.reduce((sum, r) => sum + parseInt(r.total), 0),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
