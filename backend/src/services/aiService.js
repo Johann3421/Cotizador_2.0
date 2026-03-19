@@ -1,6 +1,39 @@
 const fs = require('fs');
 const path = require('path');
 
+/**
+ * Extrae texto plano de un PDF usando pdfjs-dist (sin binarios externos)
+ */
+async function extractTextFromPdf(pdfBuffer) {
+  try {
+    let pdfjsLib;
+    try { pdfjsLib = require('pdfjs-dist'); }
+    catch (_) { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); }
+    if (pdfjsLib.GlobalWorkerOptions) pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+
+    const data     = new Uint8Array(pdfBuffer);
+    const loadTask = pdfjsLib.getDocument({ data, verbosity: 0 });
+    const pdf      = await loadTask.promise;
+
+    let texto = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page    = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      let lastY = null;
+      for (const item of content.items) {
+        if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) texto += '\n';
+        texto += item.str + ' ';
+        lastY = item.transform[5];
+      }
+      texto += '\n';
+    }
+    return texto.trim();
+  } catch (err) {
+    console.warn('[aiService] Error extrayendo texto del PDF:', err.message);
+    return null;
+  }
+}
+
 const SYSTEM_PROMPT = `
 Eres un experto en hardware de computadoras y licitaciones públicas de Perú (PeruCompras).
 Tu trabajo es extraer especificaciones técnicas de equipos de cómputo desde imágenes o PDFs de bases de licitación.
@@ -134,35 +167,41 @@ function getMimeType(imagePath) {
 }
 
 /**
- * Extrae specs usando OpenAI (GPT-4o con visión)
+ * Extrae specs usando OpenAI (GPT-4o con visión para imágenes, texto para PDFs)
  */
 async function extractWithOpenAI(base64Image, mimeType) {
   const OpenAI = require('openai');
   const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
 
   const model = process.env.AI_MODEL || 'gpt-4o';
+  const isPdf = mimeType === 'application/pdf';
+
+  // Para PDFs: extraer texto y enviarlo como mensaje de texto
+  const userContent = isPdf ? [
+    {
+      type: 'text',
+      text: `El siguiente texto fue extraído de un PDF con los requerimientos técnicos.\nAnaliza el texto y extrae todos los requerimientos de equipos de cómputo. Responde SOLO con el JSON.\n\n${Buffer.from(base64Image, 'base64').toString('utf8')}`,
+    },
+  ] : [
+    {
+      type: 'image_url',
+      image_url: {
+        url: `data:${mimeType};base64,${base64Image}`,
+        detail: 'high',
+      },
+    },
+    {
+      type: 'text',
+      text: 'Analiza esta imagen y extrae todos los requerimientos técnicos de equipos de cómputo que encuentres. Responde SOLO con el JSON.',
+    },
+  ];
 
   const response = await client.chat.completions.create({
     model,
     max_completion_tokens: 4096,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:${mimeType};base64,${base64Image}`,
-              detail: 'high',
-            },
-          },
-          {
-            type: 'text',
-            text: 'Analiza esta imagen y extrae todos los requerimientos técnicos de equipos de cómputo que encuentres. Responde SOLO con el JSON.',
-          },
-        ],
-      },
+      { role: 'user', content: userContent },
     ],
   });
 
@@ -178,10 +217,32 @@ async function extractWithAnthropic(base64Image, mimeType) {
   const client = new Anthropic({ apiKey: process.env.AI_API_KEY });
 
   const model = process.env.AI_MODEL || 'claude-sonnet-4-5-20241022';
+  const isPdf = mimeType === 'application/pdf';
 
   // Claude acepta estos mime types para imágenes
   const supportedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
   const mediaType = supportedMimes.includes(mimeType) ? mimeType : 'image/jpeg';
+
+  // Para PDFs: enviar como texto; para imágenes: enviar como imagen
+  const userContent = isPdf ? [
+    {
+      type: 'text',
+      text: `El siguiente texto fue extraído de un PDF con los requerimientos técnicos.\nAnaliza el texto y extrae todos los requerimientos de equipos de cómputo. Responde SOLO con el JSON.\n\n${Buffer.from(base64Image, 'base64').toString('utf8')}`,
+    },
+  ] : [
+    {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: mediaType,
+        data: base64Image,
+      },
+    },
+    {
+      type: 'text',
+      text: 'Analiza esta imagen y extrae todos los requerimientos técnicos de equipos de cómputo que encuentres. Responde SOLO con el JSON.',
+    },
+  ];
 
   const response = await client.messages.create({
     model,
@@ -190,20 +251,7 @@ async function extractWithAnthropic(base64Image, mimeType) {
     messages: [
       {
         role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: mediaType,
-              data: base64Image,
-            },
-          },
-          {
-            type: 'text',
-            text: 'Analiza esta imagen y extrae todos los requerimientos técnicos de equipos de cómputo que encuentres. Responde SOLO con el JSON.',
-          },
-        ],
+        content: userContent,
       },
     ],
   });
@@ -266,7 +314,7 @@ function parseAIResponse(content) {
 }
 
 /**
- * Función principal: Extrae specs de una imagen usando la AI configurada
+ * Función principal: Extrae specs de una imagen o PDF usando la AI configurada
  */
 async function extractSpecsFromImage(imagePath) {
   const provider = (process.env.AI_PROVIDER || 'openai').toLowerCase();
@@ -275,8 +323,25 @@ async function extractSpecsFromImage(imagePath) {
     throw new Error('AI_API_KEY no configurada. Agrega tu API key en las variables de entorno.');
   }
 
-  const base64Image = imageToBase64(imagePath);
   const mimeType = getMimeType(imagePath);
+  const isPdf    = mimeType === 'application/pdf';
+
+  let base64Image;
+  if (isPdf) {
+    // PDF → extraer texto → codificarlo como base64 (se decodificará a string en extractWith*)
+    const absolutePath = path.isAbsolute(imagePath)
+      ? imagePath
+      : path.join(__dirname, '../../uploads', imagePath);
+    const pdfBuffer = fs.readFileSync(absolutePath);
+    const texto = await extractTextFromPdf(pdfBuffer);
+    if (!texto || texto.trim().length < 20) {
+      throw new Error('No se pudo extraer texto del PDF. El archivo puede estar escaneado o protegido.');
+    }
+    console.log(`[aiService] PDF → ${texto.length} caracteres extraídos`);
+    base64Image = Buffer.from(texto, 'utf8').toString('base64'); // texto en base64
+  } else {
+    base64Image = imageToBase64(imagePath);
+  }
 
   console.log(`Extrayendo specs con ${provider} (${process.env.AI_MODEL || 'default'})...`);
 
