@@ -29,7 +29,19 @@ async function extractTextFromPdf(pdfBuffer) {
     }
     return texto.trim();
   } catch (err) {
-    console.warn('[aiService] Error extrayendo texto del PDF:', err.message);
+    console.warn('[aiService] pdfjs extra failed:', err.message);
+    // Intentar fallback con pdf-parse (puede extraer texto cuando pdfjs falla)
+    try {
+      const pdfparse = require('pdf-parse');
+      const data = await pdfparse(pdfBuffer || Buffer.from(''));
+      if (data && data.text && data.text.trim().length > 10) {
+        return data.text.trim();
+      }
+    } catch (e) {
+      console.warn('[aiService] pdf-parse fallback failed:', e.message);
+    }
+
+    // Si todo falla, retornar null para que el llamador pueda decidir OCR u otra acción
     return null;
   }
 }
