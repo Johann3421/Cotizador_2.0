@@ -92,6 +92,10 @@ CONECTIVIDAD — Valores posibles:
 - false = el documento dice "NO"
 - null  = el documento dice "OPCIONAL" o no lo menciona
 
+MODELO DE REFERENCIA:
+- Si el documento menciona un modelo o código de parte específico (ej: "Kenya KPC-I713700-8G-512", "ThinkCentre M70s Gen5", "HP ProDesk 400 G9"), extráelo en modelo_referencia
+- Si NO hay modelo de referencia específico → null
+
 ════════════════════════════════════════════════════════
 FORMATO DE RESPUESTA — JSON PURO SIN MARKDOWN
 ════════════════════════════════════════════════════════
@@ -148,6 +152,7 @@ FORMATO DE RESPUESTA — JSON PURO SIN MARKDOWN
       "garantia_max_meses": 36,
       "catalogo_electronico": true,
       "uso": "ofimática/escritorio",
+      "modelo_referencia": null,
       "notas": ""
     }
   ]

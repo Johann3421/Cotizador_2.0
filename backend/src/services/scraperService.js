@@ -41,10 +41,12 @@ const searchCompatibleProducts = async (specs) => {
 
   for (const marca of MARCAS) {
     // 1. Obtener fichas de DB o scraping
-    let fichas = await buscarEnDB(marca, tipo, 15);
+    let fichas = await buscarEnDB(marca, tipo, 20);
     if (fichas.length === 0) {
-      console.log(`[Scraper] DB vacía para ${marca}/${tipo} → scraping directo...`);
-      fichas = await scrapearMarca(marca, tipo);
+      // Término enriquecido: incluye almacenamiento normalizado (1tb, 512gb, etc.)
+      const termino = construirTermino(marca, tipo, specs);
+      console.log(`[Scraper] DB vacía para ${marca}/${tipo} → scraping: "${termino}"`);
+      fichas = await scrapearMarca(marca, tipo, termino !== TERMINOS[tipo]?.[marca] ? termino : null);
       if (fichas.length > 0) await guardarEnDB(fichas, marca, tipo);
     }
 
@@ -80,14 +82,43 @@ const searchCompatibleProducts = async (specs) => {
     console.log(`[Scraper] ${marca}: ${compatibles.length} compatibles de ${fichas.length} — scores: [${scores.join(', ')}]`);
   }
 
+  // ── BÚSQUEDA OCULTA POR NÚMERO DE PARTE / MODELO DE REFERENCIA ──────────
+  if (specs.modelo_referencia) {
+    try {
+      const termRef = specs.modelo_referencia.trim();
+      console.log(`[Scraper] Búsqueda por referencia: "${termRef}"`);
+      const fichasRef = await scrapearMarca('ref', tipo, termRef);
+
+      for (const f of fichasRef) {
+        const marcaFicha = detectarMarcaDesdeNombre(f.nombre);
+        if (!marcaFicha || !result[marcaFicha]) continue;
+        // Evitar duplicados
+        if (result[marcaFicha].some(x => x.fichaId === f.fichaId)) continue;
+        // Cargar PDF specs si no viene en cache
+        if (f.pdfUrl && !f.pdfSpecs) {
+          f.pdfSpecs = await extraerSpecsDePdf(f.pdfUrl).catch(() => null);
+        }
+        const fConScore = { ...f, score: calcularScore(f, specs) };
+        if (fConScore.score >= 50) {
+          result[marcaFicha].push(fConScore);
+          result[marcaFicha].sort((a, b) => b.score - a.score);
+          if (result[marcaFicha].length > 10) result[marcaFicha] = result[marcaFicha].slice(0, 10);
+          console.log(`[Scraper] Ref +${(f.nombre || '').substring(0, 30)} → ${marcaFicha} score=${fConScore.score}`);
+        }
+      }
+    } catch (e) {
+      console.warn('[Scraper] Error búsqueda referencia:', e.message);
+    }
+  }
+
   return result;
 };
 
 // ─────────────────────────────────────────────────────────────
 // SCRAPING DE UNA MARCA
 // ─────────────────────────────────────────────────────────────
-const scrapearMarca = async (marca, tipo) => {
-  const termino = TERMINOS[tipo]?.[marca];
+const scrapearMarca = async (marca, tipo, terminoPersonalizado = null) => {
+  const termino = terminoPersonalizado || TERMINOS[tipo]?.[marca];
   if (!termino) return [];
 
   console.log(`[Scraper] Scraping: "${termino}"`);
@@ -192,7 +223,7 @@ const scrapearMarca = async (marca, tipo) => {
 
     // Extraer fichas
     const fichas = await page.$$eval('a.enlace-detalles', (els) => {
-      return els.slice(0, 10).map(el => {
+      return els.slice(0, 15).map(el => {
         const card        = el.closest('.card');
         const fichaId     = el.id || '';
         const nombre      = card?.querySelector('.card-title-custom, h4.card-title')?.innerText?.trim() || '';
@@ -491,7 +522,10 @@ const calcularScore = (ficha, req) => {
     [req.procesador?.modelo_principal, req.procesador?.modelo].filter(Boolean));
 
   const modeloFicha = pdf.procesador_modelo || fp.procesador_fp || '';
-  score += getProcScore(modeloFicha, pdf.procesador_generacion || 0, modelos_req);
+  const procScore = getProcScore(modeloFicha, pdf.procesador_generacion || 0, modelos_req);
+  // REGLA DURA: procesador inferior detectado → descartar completamente
+  if (procScore === 0) return 0;
+  score += procScore;
 
   // ════════════════════════════════════════
   // RAM (25 pts)
@@ -526,9 +560,11 @@ const calcularScore = (ficha, req) => {
     ? pdf.almacenamiento
     : fp.st_gb_fp ? [{ gb: fp.st_gb_fp, tipo: fp.st_tipo_fp || 'SSD' }]
     : (() => {
-        if (html.includes('1 tb') || html.includes('1tb')) return [{ gb: 1000, tipo: 'SSD' }];
-        const m = html.match(/(\d+)\s*gb\s*(?:nvme|ssd|hdd)/i);
-        if (m) return [{ gb: parseInt(m[1]), tipo: /nvme/i.test(html) ? 'NVMe SSD' : 'SSD' }];
+        // Detectar TB primero (cualquier valor: 1tb, 2tb, 512gb, etc.)
+        const tbM = html.match(/(\d+(?:\.\d+)?)\s*tb/i);
+        if (tbM) return [{ gb: Math.round(parseFloat(tbM[1]) * 1000), tipo: html.includes('nvme') ? 'NVMe SSD' : 'SSD' }];
+        const gbM = html.match(/(\d+)\s*gb\s*(?:nvme|ssd|hdd)/i);
+        if (gbM) return [{ gb: parseInt(gbM[1]), tipo: /nvme/i.test(html) ? 'NVMe SSD' : 'SSD' }];
         return [];
       })();
 
@@ -594,6 +630,31 @@ const gbDesdeTexto = (t) => {
   if (tb) return parseFloat(tb[1]) * 1000;
   const gb = (t + '').match(/(\d+)\s*gb/i);
   return gb ? parseInt(gb[1]) : 0;
+};
+
+// ─────────────────────────────────────────────────────────────
+// DETECTAR MARCA DESDE NOMBRE DEL PRODUCTO
+// ─────────────────────────────────────────────────────────────
+const detectarMarcaDesdeNombre = (nombre) => {
+  const n = (nombre || '').toLowerCase();
+  if (n.includes('kenya'))    return 'kenya';
+  if (n.includes('lenovo') || n.includes('thinkcentre') || n.includes('thinkpad') || n.includes('ideacentre')) return 'lenovo';
+  if (/\bhp\b/.test(n) || n.includes('hewlett')) return 'hp';
+  return null;
+};
+
+// ─────────────────────────────────────────────────────────────
+// CONSTRUIR TÉRMINO DE BÚSQUEDA ENRIQUECIDO CON ALMACENAMIENTO
+// Normaliza: 1000 GB → "1tb", 512 GB → "512gb"
+// ─────────────────────────────────────────────────────────────
+const construirTermino = (marca, tipo, specs) => {
+  const base = TERMINOS[tipo]?.[marca] || '';
+  const alm  = Array.isArray(specs.almacenamiento) ? specs.almacenamiento[0] : null;
+  if (!alm?.capacidad_gb) return base;
+  const termAlm = alm.capacidad_gb >= 1000
+    ? `${Math.round(alm.capacidad_gb / 1000)}tb`
+    : `${alm.capacidad_gb}gb`;
+  return `${base} ${termAlm}`;
 };
 
 module.exports = { searchCompatibleProducts };
