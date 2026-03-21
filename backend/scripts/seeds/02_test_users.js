@@ -13,6 +13,15 @@ const USUARIOS_PRUEBA = [
     motivo_registro: 'Administrador del sistema para pruebas',
   },
   {
+    nombre:          'Yanet',
+    email:           'yanet@kenya.com',
+    password:        'Yanet2024!',
+    rol:             'admin',
+    empresa:         'Kenya Technology',
+    telefono:        '999000111',
+    motivo_registro: 'Administrador adicional',
+  },
+  {
     nombre:          'Usuario Aprobado',
     email:           'usuario@test.com',
     password:        'Test1234!',
