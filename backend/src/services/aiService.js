@@ -48,7 +48,15 @@ async function extractTextFromPdf(pdfBuffer) {
 
 const SYSTEM_PROMPT = `
 Eres un experto en hardware de computadoras y licitaciones públicas de Perú (PeruCompras).
-Tu trabajo es extraer especificaciones técnicas de equipos de cómputo desde imágenes o PDFs de bases de licitación.
+Tu trabajo es extraer especificaciones técnicas de equipos de cómputo desde CUALQUIER tipo de documento, incluyendo:
+- Bases de licitación y TDR (Términos de Referencia)
+- Fichas técnicas y especificaciones de producto
+- Guías de remisión electrónica (busca en la columna "Descripción Detallada" los equipos de cómputo)
+- Facturas y órdenes de compra (busca en la descripción de los ítems)
+- Correos electrónicos con requerimientos
+- Cualquier documento que mencione equipos de cómputo
+
+IMPORTANTE: Si el documento es una guía de remisión, factura u orden de compra, extrae las especificaciones de la columna de "Descripción" o "Descripción Detallada" de cada ítem que sea equipo de cómputo. Ignora ítems que no sean equipos (monitores separados, accesorios, etc. a menos que formen parte del requerimiento).
 
 ════════════════════════════════════════════════════════
 REGLAS DE EXTRACCIÓN — LEER ANTES DE PROCESAR
@@ -331,6 +339,234 @@ function parseAIResponse(content) {
 }
 
 /**
+ * Renderiza páginas de un PDF como imágenes PNG en base64 usando pdfjs-dist + canvas.
+ * Retorna un array de { base64, width, height } por página (máx. 4 páginas).
+ */
+async function renderPdfPagesToImages(pdfBuffer) {
+  try {
+    let pdfjsLib;
+    try { pdfjsLib = require('pdfjs-dist'); }
+    catch (_) { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); }
+    if (pdfjsLib.GlobalWorkerOptions) pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+
+    const data     = new Uint8Array(pdfBuffer);
+    const loadTask = pdfjsLib.getDocument({ data, verbosity: 0 });
+    const pdf      = await loadTask.promise;
+
+    let createCanvas;
+    try {
+      createCanvas = require('canvas').createCanvas;
+    } catch (_) {
+      console.warn('[aiService] paquete "canvas" no disponible para renderizar PDF → fallback a PDF crudo');
+      return null;
+    }
+
+    const maxPages = Math.min(pdf.numPages, 4);
+    const pages    = [];
+    const SCALE    = 2.0; // 2x para buena resolución OCR
+
+    for (let i = 1; i <= maxPages; i++) {
+      const page     = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: SCALE });
+      const canvas   = createCanvas(viewport.width, viewport.height);
+      const ctx      = canvas.getContext('2d');
+
+      await page.render({
+        canvasContext: ctx,
+        viewport,
+      }).promise;
+
+      const pngBuffer = canvas.toBuffer('image/png');
+      pages.push({
+        base64: pngBuffer.toString('base64'),
+        width:  viewport.width,
+        height: viewport.height,
+      });
+    }
+
+    console.log(`[aiService] PDF renderizado: ${pages.length} página(s) como PNG`);
+    return pages;
+  } catch (err) {
+    console.warn('[aiService] Error renderizando PDF a imágenes:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Extrae specs de un PDF escaneado enviando imágenes de sus páginas a la AI Vision.
+ */
+async function extractScannedPdfWithVision(pdfBuffer, provider) {
+  // Intentar renderizar páginas a imágenes
+  const pages = await renderPdfPagesToImages(pdfBuffer);
+
+  if (pages && pages.length > 0) {
+    console.log(`[aiService] PDF escaneado → enviando ${pages.length} página(s) como imágenes a Vision API`);
+
+    if (provider === 'anthropic') {
+      return await extractScannedWithAnthropic(pages);
+    } else {
+      return await extractScannedWithOpenAI(pages);
+    }
+  }
+
+  // Fallback: enviar el PDF crudo como base64 a OpenAI/... (GPT-4o soporta PDFs nativamente)
+  if (provider === 'openai') {
+    console.log('[aiService] Fallback: enviando PDF crudo como base64 a OpenAI');
+    const base64Pdf = pdfBuffer.toString('base64');
+    return await extractRawPdfWithOpenAI(base64Pdf);
+  }
+
+  // Fallback final para Anthropic: enviar como documento
+  if (provider === 'anthropic') {
+    console.log('[aiService] Fallback: enviando PDF crudo como document a Anthropic');
+    const base64Pdf = pdfBuffer.toString('base64');
+    return await extractRawPdfWithAnthropic(base64Pdf);
+  }
+
+  throw new Error('No se pudo procesar el PDF escaneado. Intenta subir una captura de pantalla del documento.');
+}
+
+/**
+ * Envía imágenes de páginas del PDF a OpenAI Vision.
+ */
+async function extractScannedWithOpenAI(pages) {
+  const OpenAI = require('openai');
+  const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
+  const model  = process.env.AI_MODEL || 'gpt-4o';
+
+  const content = [];
+  for (let i = 0; i < pages.length; i++) {
+    content.push({
+      type: 'image_url',
+      image_url: {
+        url: `data:image/png;base64,${pages[i].base64}`,
+        detail: 'high',
+      },
+    });
+  }
+  content.push({
+    type: 'text',
+    text: `Estas ${pages.length} imagen(es) son páginas de un documento PDF escaneado con requerimientos técnicos de equipos de cómputo. Analiza TODAS las imágenes y extrae todos los requerimientos técnicos que encuentres. Responde SOLO con el JSON.`,
+  });
+
+  const response = await client.chat.completions.create({
+    model,
+    max_completion_tokens: 4096,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content },
+    ],
+  });
+
+  return parseAIResponse(response.choices[0]?.message?.content || '');
+}
+
+/**
+ * Envía imágenes de páginas del PDF a Anthropic Vision.
+ */
+async function extractScannedWithAnthropic(pages) {
+  const Anthropic = require('@anthropic-ai/sdk');
+  const client = new Anthropic({ apiKey: process.env.AI_API_KEY });
+  const model  = process.env.AI_MODEL || 'claude-sonnet-4-5-20241022';
+
+  const content = [];
+  for (let i = 0; i < pages.length; i++) {
+    content.push({
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: 'image/png',
+        data: pages[i].base64,
+      },
+    });
+  }
+  content.push({
+    type: 'text',
+    text: `Estas ${pages.length} imagen(es) son páginas de un documento PDF escaneado con requerimientos técnicos de equipos de cómputo. Analiza TODAS las imágenes y extrae todos los requerimientos técnicos que encuentres. Responde SOLO con el JSON.`,
+  });
+
+  const response = await client.messages.create({
+    model,
+    max_tokens: 4096,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content }],
+  });
+
+  return parseAIResponse(response.content[0]?.text || '');
+}
+
+/**
+ * Envía PDF crudo como base64 a OpenAI (GPT-4o soporta PDFs nativamente como imagen).
+ */
+async function extractRawPdfWithOpenAI(base64Pdf) {
+  const OpenAI = require('openai');
+  const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
+  const model  = process.env.AI_MODEL || 'gpt-4o';
+
+  const response = await client.chat.completions.create({
+    model,
+    max_completion_tokens: 4096,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: {
+              url: `data:application/pdf;base64,${base64Pdf}`,
+              detail: 'high',
+            },
+          },
+          {
+            type: 'text',
+            text: 'Este es un documento PDF escaneado con requerimientos técnicos de equipos de cómputo. Analiza el documento y extrae todos los requerimientos técnicos que encuentres. Responde SOLO con el JSON.',
+          },
+        ],
+      },
+    ],
+  });
+
+  return parseAIResponse(response.choices[0]?.message?.content || '');
+}
+
+/**
+ * Envía PDF crudo como document a Anthropic Claude.
+ */
+async function extractRawPdfWithAnthropic(base64Pdf) {
+  const Anthropic = require('@anthropic-ai/sdk');
+  const client = new Anthropic({ apiKey: process.env.AI_API_KEY });
+  const model  = process.env.AI_MODEL || 'claude-sonnet-4-5-20241022';
+
+  const response = await client.messages.create({
+    model,
+    max_tokens: 4096,
+    system: SYSTEM_PROMPT,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'document',
+            source: {
+              type: 'base64',
+              media_type: 'application/pdf',
+              data: base64Pdf,
+            },
+          },
+          {
+            type: 'text',
+            text: 'Este es un documento PDF escaneado con requerimientos técnicos de equipos de cómputo. Analiza el documento y extrae todos los requerimientos técnicos que encuentres. Responde SOLO con el JSON.',
+          },
+        ],
+      },
+    ],
+  });
+
+  return parseAIResponse(response.content[0]?.text || '');
+}
+
+/**
  * Función principal: Extrae specs de una imagen o PDF usando la AI configurada
  */
 async function extractSpecsFromImage(imagePath) {
@@ -344,29 +580,43 @@ async function extractSpecsFromImage(imagePath) {
   const isPdf    = mimeType === 'application/pdf';
 
   let base64Image;
+  let result;
+
   if (isPdf) {
-    // PDF → extraer texto → codificarlo como base64 (se decodificará a string en extractWith*)
     const absolutePath = path.isAbsolute(imagePath)
       ? imagePath
       : path.join(__dirname, '../../uploads', imagePath);
     const pdfBuffer = fs.readFileSync(absolutePath);
+    
+    // Intentar extraer texto del PDF
     const texto = await extractTextFromPdf(pdfBuffer);
-    if (!texto || texto.trim().length < 20) {
-      throw new Error('No se pudo extraer texto del PDF. El archivo puede estar escaneado o protegido.');
+    
+    if (texto && texto.trim().length >= 20) {
+      // PDF con texto embebido → enviar como texto
+      console.log(`[aiService] PDF con texto → ${texto.length} caracteres extraídos`);
+      base64Image = Buffer.from(texto, 'utf8').toString('base64');
+
+      console.log(`Extrayendo specs con ${provider} (${process.env.AI_MODEL || 'default'})...`);
+      if (provider === 'anthropic') {
+        result = await extractWithAnthropic(base64Image, mimeType);
+      } else {
+        result = await extractWithOpenAI(base64Image, mimeType);
+      }
+    } else {
+      // PDF escaneado (sin texto) → usar Vision API con imágenes renderizadas
+      console.log(`[aiService] PDF escaneado detectado (${texto ? texto.length : 0} chars) → procesando con Vision API`);
+      result = await extractScannedPdfWithVision(pdfBuffer, provider);
     }
-    console.log(`[aiService] PDF → ${texto.length} caracteres extraídos`);
-    base64Image = Buffer.from(texto, 'utf8').toString('base64'); // texto en base64
   } else {
+    // Imagen normal → enviar directo
     base64Image = imageToBase64(imagePath);
-  }
-
-  console.log(`Extrayendo specs con ${provider} (${process.env.AI_MODEL || 'default'})...`);
-
-  let result;
-  if (provider === 'anthropic') {
-    result = await extractWithAnthropic(base64Image, mimeType);
-  } else {
-    result = await extractWithOpenAI(base64Image, mimeType);
+    
+    console.log(`Extrayendo specs con ${provider} (${process.env.AI_MODEL || 'default'})...`);
+    if (provider === 'anthropic') {
+      result = await extractWithAnthropic(base64Image, mimeType);
+    } else {
+      result = await extractWithOpenAI(base64Image, mimeType);
+    }
   }
 
   // Validar estructura mínima

@@ -98,6 +98,20 @@ const searchCompatibleProducts = async (specs) => {
         if (f.pdfUrl && !f.pdfSpecs) {
           f.pdfSpecs = await extraerSpecsDePdf(f.pdfUrl).catch(() => null);
         }
+
+        // ── VALIDACIÓN EXTRA PARA BÚSQUEDA POR REFERENCIA ─────────────
+        // Verificar que el procesador de la ficha encontrada sea >= al requerido
+        const modelos_req = (specs.procesador?.modelos_aceptados ||
+          [specs.procesador?.modelo_principal, specs.procesador?.modelo].filter(Boolean));
+        const modeloFicha = f.pdfSpecs?.specs?.procesador_modelo || '';
+        if (modelos_req.length > 0 && modeloFicha) {
+          const procScore = getProcScore(modeloFicha, f.pdfSpecs?.specs?.procesador_generacion || 0, modelos_req);
+          if (procScore === 0) {
+            console.log(`[Scraper] Ref DESCARTADA: ${(f.nombre || '').substring(0, 40)} → procesador inferior (procScore=0)`);
+            continue; // Procesador inferior → no incluir
+          }
+        }
+
         const fConScore = { ...f, score: calcularScore(f, specs) };
         if (fConScore.score >= 50) {
           result[marcaFicha].push(fConScore);
@@ -452,7 +466,7 @@ const parsearProcesador = (texto) => {
  */
 const getProcScore = (fichaTexto, _genFromPdf, modelos_req) => {
   const fichaParsed = parsearProcesador(fichaTexto);
-  if (!fichaParsed) return 10;   // sin info → neutral
+  if (!fichaParsed) return 5;    // sin info verificable → penalizar (requiere PDF o data-fp válidos)
 
   const reqs = modelos_req.map(m => parsearProcesador(m)).filter(Boolean);
   if (reqs.length === 0) return 20; // sin requisito → no penalizar
@@ -542,9 +556,13 @@ const calcularScore = (ficha, req) => {
       else if (ramFicha_tipo === 'DDR5' && ramReq_tipo === 'DDR4') score += 5;
       else if (ramFicha_tipo === 'DDR4' && ramReq_tipo === 'DDR5') score += 1;
     } else if (ramFicha_gb > 0) {
+      // RAM inferior → penalizar proporcional
       const ratio = ramFicha_gb / ramReq_gb;
       if (ratio >= 0.5) score += Math.round(ratio * 15);
+      // ratio < 0.5 → 0 puntos (RAM muy inferior)
     }
+    // ramFicha_gb === 0 (sin info de RAM) → dar score mínimo en vez de neutral
+    if (ramFicha_gb === 0) score += 8;
   } else {
     score += 20;
   }
@@ -592,7 +610,7 @@ const calcularScore = (ficha, req) => {
   const grafFicha = pdf.grafica_tipo;
 
   if (!grafFicha) {
-    score += 8; // Sin info del PDF → no penalizar
+    score += 5; // Sin info del PDF → penalizar levemente (antes era 8)
   } else if (!grafReq || grafReq === 'integrada' || req.grafica?.opcional_dedicada) {
     score += 15;
   } else if (grafReq === 'dedicada') {
@@ -657,4 +675,14 @@ const construirTermino = (marca, tipo, specs) => {
   return `${base} ${termAlm}`;
 };
 
-module.exports = { searchCompatibleProducts };
+/**
+ * Alias público para el refresh de catálogo desde el controlador
+ */
+const searchFichasByMarcaYTipo = async (marca, tipo, limit) => {
+  const termino = TERMINOS[tipo]?.[marca] || `computadora ${marca}`;
+  const fichas = await scrapearMarca(marca, tipo, termino);
+  if (fichas.length > 0) await guardarEnDB(fichas, marca, tipo);
+  return fichas.slice(0, limit || 20);
+};
+
+module.exports = { searchCompatibleProducts, searchFichasByMarcaYTipo };

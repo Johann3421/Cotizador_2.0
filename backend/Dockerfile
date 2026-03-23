@@ -1,6 +1,6 @@
 FROM node:20-slim
 
-# Instalar dependencias del sistema operativo necesarias para Chromium
+# Instalar dependencias del sistema operativo necesarias para Chromium y canvas (PDF→Image)
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-liberation \
@@ -22,6 +22,13 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     wget \
     ca-certificates \
+    # Dependencias para node-canvas (renderizar PDF a imagen)
+    build-essential \
+    libcairo2-dev \
+    libjpeg-dev \
+    libpango1.0-dev \
+    libgif-dev \
+    python3 \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
@@ -30,8 +37,8 @@ WORKDIR /app
 # Copiar package.json primero (mejor cache de Docker)
 COPY package*.json ./
 
-# Instalar dependencias de Node
-RUN npm ci --only=production
+# Instalar dependencias de Node + canvas para renderizar PDF escaneados
+RUN npm ci --only=production && npm install canvas --build-from-source || true
 
 # Decirle a Playwright que use el Chromium del sistema
 # en vez de descargar el suyo propio

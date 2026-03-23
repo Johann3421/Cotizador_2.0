@@ -43,8 +43,23 @@ async function extractFromImage(req, res) {
     });
   } catch (error) {
     console.error('[Extract] Error:', error.message);
+    
+    // Mensajes de error más específicos para el usuario
+    let userMessage = 'Error al extraer especificaciones de la imagen';
+    if (error.message.includes('AI_API_KEY')) {
+      userMessage = 'Error de configuración: la API key de IA no está configurada.';
+    } else if (error.message.includes('escaneado') || error.message.includes('protegido')) {
+      userMessage = 'No pudimos leer el PDF. Si es un documento escaneado, intenta subirlo como imagen (captura de pantalla).';
+    } else if (error.message.includes('JSON')) {
+      userMessage = 'No pudimos interpretar el documento. Intenta con una imagen más clara o un formato diferente.';
+    } else if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
+      userMessage = 'La solicitud tardó demasiado. Por favor intenta de nuevo.';
+    } else if (error.message.includes('rate limit') || error.message.includes('429')) {
+      userMessage = 'Se alcanzó el límite de solicitudes a la API. Espera unos minutos e intenta de nuevo.';
+    }
+    
     res.status(500).json({
-      error: 'Error al extraer especificaciones de la imagen',
+      error: userMessage,
       details: error.message,
     });
   }
