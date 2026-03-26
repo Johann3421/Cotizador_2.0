@@ -246,6 +246,14 @@ function getMimeType(imagePath) {
 }
 
 /**
+ * Devuelve true si el modelo es de la familia o-series de OpenAI (o1, o3, o4-mini…).
+ * Estos modelos usan max_completion_tokens en vez de max_tokens y no soportan role:system.
+ */
+function isOSeriesModel(model) {
+  return /^o\d/i.test(model);
+}
+
+/**
  * Extrae specs usando OpenAI (GPT-4o con visión para imágenes, texto para PDFs)
  */
 async function extractWithOpenAI(base64Image, mimeType) {
@@ -275,21 +283,26 @@ async function extractWithOpenAI(base64Image, mimeType) {
     },
   ];
 
-  const response = await client.chat.completions.create({
+  // o-series (o1/o3/o4-mini) usa max_completion_tokens y no soporta role:system
+  const oSeries = isOSeriesModel(model);
+  const messages = oSeries
+    ? [{ role: 'user', content: isPdf
+        ? [{ type: 'text', text: `${SYSTEM_PROMPT}\n\nEl siguiente texto fue extraído de un PDF con los requerimientos técnicos.\nAnaliza el texto y extrae todos los requerimientos de equipos de cómputo. Responde SOLO con el JSON.\n\n${Buffer.from(base64Image, 'base64').toString('utf8')}` }]
+        : [...userContent.slice(0, -1), { type: 'text', text: `${SYSTEM_PROMPT}\n\nAnaliza esta imagen y extrae todos los requerimientos técnicos de equipos de cómputo que encuentres. Responde SOLO con el JSON.` }]
+      }]
+    : [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userContent },
+      ];
+
+  const createParams = {
     model,
-    max_tokens: 4096,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: userContent },
-    ],
-  });
+    messages,
+    ...(oSeries ? { max_completion_tokens: 4096 } : { max_tokens: 4096 }),
+  };
 
-  const content = response.choices[0]?.message?.content || '';
-  return parseAIResponse(content);
-}
+  const response = await client.chat.completions.create(createParams);
 
-/**
- * Extrae specs usando Anthropic Claude
  */
 async function extractWithAnthropic(base64Image, mimeType) {
   const Anthropic = require('@anthropic-ai/sdk');
@@ -527,13 +540,20 @@ async function extractScannedWithOpenAI(pages) {
     text: `Estas ${pages.length} imagen(es) son páginas de un documento PDF escaneado con requerimientos técnicos de equipos de cómputo. Analiza TODAS las imágenes y extrae todos los requerimientos técnicos que encuentres. Responde SOLO con el JSON.`,
   });
 
+  const oSeries = isOSeriesModel(model);
+  const messages = oSeries
+    ? [{ role: 'user', content }]
+    : [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content }];
+  if (oSeries) {
+    // Prepend system prompt into the last text item
+    const last = messages[0].content[messages[0].content.length - 1];
+    last.text = `${SYSTEM_PROMPT}\n\n${last.text}`;
+  }
+
   const response = await client.chat.completions.create({
     model,
-    max_tokens: 4096,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content },
-    ],
+    ...(oSeries ? { max_completion_tokens: 4096 } : { max_tokens: 4096 }),
+    messages,
   });
 
   return parseAIResponse(response.choices[0]?.message?.content || '');
