@@ -12,8 +12,9 @@ async function extractTextFromPdf(pdfBuffer) {
   try {
     const pdfparse = require('pdf-parse');
     const data = await pdfparse(pdfBuffer);
-    if (data && data.text && data.text.trim().length >= 20) {
-      console.log(`[aiService] pdf-parse OK: ${data.text.trim().length} caracteres, ${data.numpages} páginas`);
+    const len  = data?.text?.trim().length || 0;
+    console.log(`[aiService] pdf-parse extrajo ${len} caracteres, ${data?.numpages || '?'} páginas`);
+    if (len >= 10) {
       return data.text.trim();
     }
   } catch (e) {
@@ -43,15 +44,17 @@ async function extractTextFromPdf(pdfBuffer) {
       }
       texto += '\n';
     }
-    if (texto.trim().length >= 20) {
-      console.log(`[aiService] pdfjs OK: ${texto.trim().length} caracteres`);
+    const len = texto.trim().length;
+    console.log(`[aiService] pdfjs extrajo ${len} caracteres`);
+    if (len >= 10) {
       return texto.trim();
     }
   } catch (err) {
     console.warn('[aiService] pdfjs falló:', err.message);
   }
 
-  // PDF escaneado — sin texto extraíble
+  // PDF escaneado o sin texto extraíble
+  console.warn('[aiService] Ambos extractores devolvieron < 10 chars → tratando como PDF escaneado');
   return null;
 }
 
@@ -392,39 +395,63 @@ function parseAIResponse(content) {
 /**
  * Renderiza páginas de un PDF como imágenes PNG en base64 usando pdfjs-dist + canvas.
  * Retorna un array de { base64, width, height } por página (máx. 4 páginas).
+ *
+ * IMPORTANTE: pdfjs-dist v3 en Node.js requiere que se le pase explícitamente
+ * un NodeCanvasFactory — sin él lanza "Image or Canvas expected".
  */
 async function renderPdfPagesToImages(pdfBuffer) {
   try {
+    let createCanvas;
+    try {
+      createCanvas = require('canvas').createCanvas;
+    } catch (_) {
+      console.warn('[aiService] paquete "canvas" no disponible → fallback');
+      return null;
+    }
+
+    // NodeCanvasFactory requerida por pdfjs-dist v3 en Node.js
+    class NodeCanvasFactory {
+      create(width, height) {
+        const canvas  = createCanvas(width, height);
+        const context = canvas.getContext('2d');
+        return { canvas, context };
+      }
+      reset(canvasAndContext, width, height) {
+        canvasAndContext.canvas.width  = width;
+        canvasAndContext.canvas.height = height;
+      }
+      destroy(canvasAndContext) {
+        canvasAndContext.canvas.width  = 0;
+        canvasAndContext.canvas.height = 0;
+        canvasAndContext.canvas   = null;
+        canvasAndContext.context  = null;
+      }
+    }
+
     let pdfjsLib;
     try { pdfjsLib = require('pdfjs-dist'); }
     catch (_) { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); }
     if (pdfjsLib.GlobalWorkerOptions) pdfjsLib.GlobalWorkerOptions.workerSrc = '';
 
-    const data     = new Uint8Array(pdfBuffer);
-    const loadTask = pdfjsLib.getDocument({ data, verbosity: 0 });
-    const pdf      = await loadTask.promise;
-
-    let createCanvas;
-    try {
-      createCanvas = require('canvas').createCanvas;
-    } catch (_) {
-      console.warn('[aiService] paquete "canvas" no disponible para renderizar PDF → fallback a PDF crudo');
-      return null;
-    }
+    const canvasFactory = new NodeCanvasFactory();
+    const data          = new Uint8Array(pdfBuffer);
+    // Pasar canvasFactory a getDocument para que pdfjs pueda manejar gráficos
+    const loadTask      = pdfjsLib.getDocument({ data, verbosity: 0, canvasFactory });
+    const pdf           = await loadTask.promise;
 
     const maxPages = Math.min(pdf.numPages, 4);
     const pages    = [];
-    const SCALE    = 2.0; // 2x para buena resolución OCR
+    const SCALE    = 2.0;
 
     for (let i = 1; i <= maxPages; i++) {
       const page     = await pdf.getPage(i);
       const viewport = page.getViewport({ scale: SCALE });
-      const canvas   = createCanvas(viewport.width, viewport.height);
-      const ctx      = canvas.getContext('2d');
+      const { canvas, context } = canvasFactory.create(viewport.width, viewport.height);
 
       await page.render({
-        canvasContext: ctx,
+        canvasContext: context,
         viewport,
+        canvasFactory,
       }).promise;
 
       const pngBuffer = canvas.toBuffer('image/png');
@@ -654,7 +681,7 @@ async function extractSpecsFromImage(imagePath) {
     // 1. Intentar extraer texto (pdf-parse primero, luego pdfjs)
     const texto = await extractTextFromPdf(pdfBuffer);
     
-    if (texto && texto.trim().length >= 20) {
+    if (texto && texto.trim().length >= 10) {
       // PDF con texto embebido → enviar como texto
       console.log(`[aiService] PDF con texto → ${texto.length} caracteres`);
       result = await extractFromText(texto, 'PDF-texto', provider);
