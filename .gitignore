@@ -6,3 +6,14 @@ dist/
 .DS_Store
 backend_backup/
 docker-compose.override.yml
+
+# n8n workflows (contienen API keys y tokens sensibles)
+Kenya Bot*.json
+Kenya Cotizador*.json
+*.n8n.json
+
+# Scripts de parche/migración temporal
+patch_*.py
+update_*.js
+fix_*.js
+verify_*.py

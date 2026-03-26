@@ -17,6 +17,12 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 // POST /api/extract - Subir imagen y extraer specs
 router.post('/extract', verificarTokenOpcional, upload.single('image'), extractController.extractFromImage);
 
+// POST /api/extract-url - Extraer specs desde una URL (útil para n8n/chatwoot)
+router.post('/extract-url', verificarTokenOpcional, extractController.extractFromUrl);
+
+// POST /api/proxy-image - Proxy para evitar problemas de CORS/Stream
+router.post('/proxy-image', extractController.proxyImage);
+
 // GET /api/requirements/:id - Obtener requerimiento
 router.get('/requirements/:id', extractController.getRequirement);
 

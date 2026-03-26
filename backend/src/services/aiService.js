@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 
 /**
  * Extrae texto plano de un PDF usando pdfjs-dist (sin binarios externos)
@@ -627,7 +628,39 @@ async function extractSpecsFromImage(imagePath) {
   return result;
 }
 
+/**
+ * Extrae especificaciones técnicas desde una URL (útil para WhatsApp/Bots)
+ */
+async function extractSpecsFromUrl(url, token = null) {
+  const provider = process.env.AI_PROVIDER || 'openai';
+  const headers = {};
+  if (token) headers['api_access_token'] = token;
+
+  const response = await axios.get(url, {
+    headers,
+    responseType: 'arraybuffer',
+    timeout: 15000
+  });
+
+  const base64Image = Buffer.from(response.data).toString('base64');
+  const mimeType = response.headers['content-type'] || 'image/jpeg';
+
+  let result;
+  if (provider === 'anthropic') {
+    result = await extractWithAnthropic(base64Image, mimeType);
+  } else {
+    result = await extractWithOpenAI(base64Image, mimeType);
+  }
+
+  if (!result.equipos || !Array.isArray(result.equipos)) {
+    throw new Error('La respuesta de la AI no contiene el campo "equipos" esperado.');
+  }
+
+  return result;
+}
+
 module.exports = {
   extractSpecsFromImage,
+  extractSpecsFromUrl,
   SYSTEM_PROMPT,
 };

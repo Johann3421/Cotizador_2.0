@@ -1,4 +1,5 @@
-const { extractSpecsFromImage } = require('../services/aiService');
+const { extractSpecsFromImage, extractSpecsFromUrl } = require('../services/aiService');
+const axios = require('axios');
 const Requirement = require('../models/Requirement');
 const { Pool } = require('pg');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -105,8 +106,60 @@ async function updateRequirement(req, res) {
   }
 }
 
+/**
+ * POST /api/extract-url
+ */
+async function extractFromUrl(req, res) {
+  try {
+    const { url, token } = req.body;
+    if (!url) return res.status(400).json({ error: 'URL no proporcionada' });
+
+    console.log(`[ExtractUrl] Procesando URL remota: ${url.substring(0, 70)}...`);
+    const result = await extractSpecsFromUrl(url.trim(), token);
+
+    res.json({
+      success: true,
+      equipos: result.equipos || [],
+      notas: result.notas_adicionales || '',
+      openai_debug: 'OK'
+    });
+  } catch (error) {
+    console.error('[ExtractUrl] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+}
+
+/**
+ * POST /api/proxy-image
+ */
+async function proxyImage(req, res) {
+  try {
+    const { url, token } = req.body;
+    if (!url) return res.status(400).json({ error: 'URL no proporcionada' });
+
+    const headers = {};
+    if (token) headers['api_access_token'] = token;
+
+    const resp = await axios.get(url, {
+      headers,
+      responseType: 'arraybuffer',
+      timeout: 10000
+    });
+
+    res.json({
+      base64: Buffer.from(resp.data).toString('base64'),
+      mimeType: resp.headers['content-type'] || 'image/jpeg',
+      bytes: resp.data.length
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
 module.exports = {
   extractFromImage,
+  extractFromUrl,
+  proxyImage,
   getRequirement,
   updateRequirement,
 };

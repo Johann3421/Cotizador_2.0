@@ -17,9 +17,10 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
 const fs = require('fs');
-const apiRoutes   = require('./routes/api');
-const authRoutes  = require('./routes/auth');
-const adminRoutes = require('./routes/admin');
+const apiRoutes     = require('./routes/api');
+const authRoutes    = require('./routes/auth');
+const adminRoutes   = require('./routes/admin');
+const chatbotRoutes = require('./routes/chatbot');
 const { pool } = require('./db/connection');
 const { iniciarCronSync, ejecutarSyncManual } = require('./jobs/syncCatalog');
 
@@ -59,9 +60,10 @@ app.use('/uploads', express.static(uploadsDir));
 // ============================================
 // ROUTES
 // ============================================
-app.use('/api/auth',  authRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api',       apiRoutes);
+app.use('/api/auth',    authRoutes);
+app.use('/api/admin',   adminRoutes);
+app.use('/api/chatbot', chatbotRoutes);
+app.use('/api',         apiRoutes);
 
 // Ruta raíz
 app.get('/', (req, res) => {
