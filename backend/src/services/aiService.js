@@ -274,7 +274,7 @@ async function extractWithOpenAI(base64Image, mimeType) {
 
   const response = await client.chat.completions.create({
     model,
-    max_completion_tokens: 4096,
+    max_tokens: 4096,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userContent },
@@ -502,7 +502,7 @@ async function extractScannedWithOpenAI(pages) {
 
   const response = await client.chat.completions.create({
     model,
-    max_completion_tokens: 4096,
+    max_tokens: 4096,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content },
@@ -547,38 +547,17 @@ async function extractScannedWithAnthropic(pages) {
 }
 
 /**
- * Envía PDF crudo como base64 a OpenAI (GPT-4o soporta PDFs nativamente como imagen).
+ * Fallback para PDF escaneado cuando canvas no está disponible y el proveedor es OpenAI.
+ * GPT-4o Chat Completions NO acepta application/pdf como image_url — necesita imágenes PNG.
+ * Si no podemos renderizar páginas, indicamos el error claramente.
  */
 async function extractRawPdfWithOpenAI(base64Pdf) {
-  const OpenAI = require('openai');
-  const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
-  const model  = process.env.AI_MODEL || 'gpt-4o';
-
-  const response = await client.chat.completions.create({
-    model,
-    max_completion_tokens: 4096,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:application/pdf;base64,${base64Pdf}`,
-              detail: 'high',
-            },
-          },
-          {
-            type: 'text',
-            text: 'Este es un documento PDF escaneado con requerimientos técnicos de equipos de cómputo. Analiza el documento y extrae todos los requerimientos técnicos que encuentres. Responde SOLO con el JSON.',
-          },
-        ],
-      },
-    ],
-  });
-
-  return parseAIResponse(response.choices[0]?.message?.content || '');
+  // Chat Completions no acepta data:application/pdf;base64 como image_url.
+  // Sin canvas no podemos convertir el PDF a imágenes — informar al usuario.
+  throw new Error(
+    'PDF escaneado detectado pero no es posible procesarlo sin el módulo de renderizado. ' +
+    'Por favor convierte las páginas del PDF a imágenes (PNG/JPG) y vuelve a subirlas.'
+  );
 }
 
 /**

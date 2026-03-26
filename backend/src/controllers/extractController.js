@@ -43,19 +43,27 @@ async function extractFromImage(req, res) {
       image_filename: req.file.filename,
     });
   } catch (error) {
-    console.error('[Extract] Error:', error.message);
+    console.error('[Extract] Error completo:', error.message);
+    if (error.stack) console.error('[Extract] Stack:', error.stack.split('\n').slice(0,5).join('\n'));
     
     // Mensajes de error más específicos para el usuario
     let userMessage = 'Error al extraer especificaciones de la imagen';
-    if (error.message.includes('AI_API_KEY')) {
+    const msg = (error.message || '').toLowerCase();
+    if (msg.includes('ai_api_key') || msg.includes('no configurada')) {
       userMessage = 'Error de configuración: la API key de IA no está configurada.';
-    } else if (error.message.includes('escaneado') || error.message.includes('protegido')) {
+    } else if (msg.includes('incorrect api key') || msg.includes('invalid api key') || msg.includes('authentication') || msg.includes('unauthorized') || msg.includes('401')) {
+      userMessage = 'API key incorrecta o sin permisos. Verifica la configuración de AI_API_KEY en Dokploy.';
+    } else if (msg.includes('quota') || msg.includes('insufficient_quota') || msg.includes('billing') || msg.includes('exceeded your current quota')) {
+      userMessage = 'Cuota de la API agotada. Recarga tu saldo en la plataforma de IA.';
+    } else if (msg.includes('model') && (msg.includes('not found') || msg.includes('does not exist'))) {
+      userMessage = 'El modelo de IA configurado no existe. Verifica el valor de AI_MODEL.';
+    } else if (msg.includes('escaneado') || msg.includes('protegido') || msg.includes('canvas') || msg.includes('renderiz')) {
       userMessage = 'No pudimos leer el PDF. Si es un documento escaneado, intenta subirlo como imagen (captura de pantalla).';
-    } else if (error.message.includes('JSON')) {
+    } else if (msg.includes('json') || msg.includes('no retornó')) {
       userMessage = 'No pudimos interpretar el documento. Intenta con una imagen más clara o un formato diferente.';
-    } else if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
+    } else if (msg.includes('timeout') || msg.includes('etimedout') || msg.includes('econnreset')) {
       userMessage = 'La solicitud tardó demasiado. Por favor intenta de nuevo.';
-    } else if (error.message.includes('rate limit') || error.message.includes('429')) {
+    } else if (msg.includes('rate limit') || msg.includes('429') || msg.includes('too many requests')) {
       userMessage = 'Se alcanzó el límite de solicitudes a la API. Espera unos minutos e intenta de nuevo.';
     }
     

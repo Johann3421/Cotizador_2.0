@@ -37,8 +37,11 @@ WORKDIR /app
 # Copiar package.json primero (mejor cache de Docker)
 COPY package*.json ./
 
-# Instalar dependencias de Node + canvas para renderizar PDF escaneados
-RUN npm ci --only=production && npm install canvas --build-from-source || true
+# Instalar dependencias de Node (solo producción)
+RUN npm ci --only=production
+
+# Instalar canvas para renderizar PDFs escaneados como imágenes (falla silenciosa si no hay deps del SO)
+RUN npm install canvas --build-from-source || true
 
 # Decirle a Playwright que use el Chromium del sistema
 # en vez de descargar el suyo propio
