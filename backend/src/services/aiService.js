@@ -13,12 +13,14 @@ async function extractTextFromPdf(pdfBuffer) {
     const pdfparse = require('pdf-parse');
     const data = await pdfparse(pdfBuffer);
     const len  = data?.text?.trim().length || 0;
-    console.log(`[aiService] pdf-parse extrajo ${len} caracteres, ${data?.numpages || '?'} páginas`);
-    if (len >= 10) {
+    const sample = data?.text?.trim().substring(0, 120).replace(/\s+/g, ' ');
+    console.log(`[aiService] pdf-parse extrajo ${len} chars, ${data?.numpages || '?'} págs — muestra: "${sample}"`);
+    if (len >= 5) {
       return data.text.trim();
     }
+    console.warn(`[aiService] pdf-parse: solo ${len} chars — insuficiente`);
   } catch (e) {
-    console.warn('[aiService] pdf-parse falló:', e.message);
+    console.error('[aiService] pdf-parse excepción:', e.message);
   }
 
   // --- Estrategia 2: pdfjs-dist ---
@@ -45,16 +47,18 @@ async function extractTextFromPdf(pdfBuffer) {
       texto += '\n';
     }
     const len = texto.trim().length;
-    console.log(`[aiService] pdfjs extrajo ${len} caracteres`);
-    if (len >= 10) {
+    const sample = texto.trim().substring(0, 120).replace(/\s+/g, ' ');
+    console.log(`[aiService] pdfjs extrajo ${len} chars — muestra: "${sample}"`);
+    if (len >= 5) {
       return texto.trim();
     }
+    console.warn(`[aiService] pdfjs: solo ${len} chars — insuficiente`);
   } catch (err) {
-    console.warn('[aiService] pdfjs falló:', err.message);
+    console.error('[aiService] pdfjs excepción:', err.message);
   }
 
   // PDF escaneado o sin texto extraíble
-  console.warn('[aiService] Ambos extractores devolvieron < 10 chars → tratando como PDF escaneado');
+  console.warn('[aiService] Ambos extractores fallaron → tratando como PDF escaneado (imágenes)');
   return null;
 }
 
@@ -246,27 +250,16 @@ function getMimeType(imagePath) {
 }
 
 /**
- * Devuelve true si el modelo es de la familia o-series de OpenAI (o1, o3, o4-mini…).
- * Estos modelos usan max_completion_tokens en vez de max_tokens y no soportan role:system.
- */
-function isOSeriesModel(model) {
-  if (!model) return false;
-  const m = String(model).toLowerCase();
-  // Covers: o1, o3, o4-mini, gpt-4o, gpt-4o-mini, or models starting with 'o'
-  return m.startsWith('o') || m.includes('gpt-4o') || /^o\d/.test(m);
-}
-
-/**
- * Extrae specs usando OpenAI (GPT-4o con visión para imágenes, texto para PDFs)
+ * Extrae specs usando OpenAI. Siempre usa max_completion_tokens (compatible con
+ * todos los modelos modernos: gpt-4o, gpt-4o-mini, gpt-5-mini, o1, o3, o4-mini…).
  */
 async function extractWithOpenAI(base64Image, mimeType) {
   const OpenAI = require('openai');
   const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
 
-  const model = process.env.AI_MODEL || 'gpt-4o';
-  const isPdf = mimeType === 'application/pdf';
+  const model  = process.env.AI_MODEL || 'gpt-4o';
+  const isPdf  = mimeType === 'application/pdf';
 
-  // Para PDFs: extraer texto y enviarlo como mensaje de texto
   const userContent = isPdf ? [
     {
       type: 'text',
@@ -275,10 +268,7 @@ async function extractWithOpenAI(base64Image, mimeType) {
   ] : [
     {
       type: 'image_url',
-      image_url: {
-        url: `data:${mimeType};base64,${base64Image}`,
-        detail: 'high',
-      },
+      image_url: { url: `data:${mimeType};base64,${base64Image}`, detail: 'high' },
     },
     {
       type: 'text',
@@ -286,28 +276,16 @@ async function extractWithOpenAI(base64Image, mimeType) {
     },
   ];
 
-  // o-series (o1/o3/o4-mini) usa max_completion_tokens y no soporta role:system
-  const oSeries = isOSeriesModel(model);
-  const messages = oSeries
-    ? [{ role: 'user', content: isPdf
-        ? [{ type: 'text', text: `${SYSTEM_PROMPT}\n\nEl siguiente texto fue extraído de un PDF con los requerimientos técnicos.\nAnaliza el texto y extrae todos los requerimientos de equipos de cómputo. Responde SOLO con el JSON.\n\n${Buffer.from(base64Image, 'base64').toString('utf8')}` }]
-        : [...userContent.slice(0, -1), { type: 'text', text: `${SYSTEM_PROMPT}\n\nAnaliza esta imagen y extrae todos los requerimientos técnicos de equipos de cómputo que encuentres. Responde SOLO con el JSON.` }]
-      }]
-    : [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userContent },
-      ];
-
-  const createParams = {
+  console.log(`[aiService] extractWithOpenAI model=${model} isPdf=${isPdf}`);
+  const response = await client.chat.completions.create({
     model,
-    messages,
-    ...(oSeries ? { max_completion_tokens: 4096 } : { max_tokens: 4096 }),
-  };
-  const paramKeys = Object.keys(createParams).filter(k => k !== 'messages');
-  console.log(`[aiService] OpenAI createParams keys=${paramKeys.join(',')} model=${model} oSeries=${oSeries}`);
-  const response = await client.chat.completions.create(createParams);
-  const content = response.choices[0]?.message?.content || '';
-  return parseAIResponse(content);
+    max_completion_tokens: 4096,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user',   content: userContent },
+    ],
+  });
+  return parseAIResponse(response.choices[0]?.message?.content || '');
 }
 
 async function extractWithAnthropic(base64Image, mimeType) {
@@ -546,19 +524,17 @@ async function extractScannedWithOpenAI(pages) {
     text: `Estas ${pages.length} imagen(es) son páginas de un documento PDF escaneado con requerimientos técnicos de equipos de cómputo. Analiza TODAS las imágenes y extrae todos los requerimientos técnicos que encuentres. Responde SOLO con el JSON.`,
   });
 
-  const oSeries = isOSeriesModel(model);
-  const messages = oSeries
-    ? [{ role: 'user', content }]
-    : [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content }];
-  if (oSeries) {
-    // Prepend system prompt into the last text item
-    const last = messages[0].content[messages[0].content.length - 1];
-    last.text = `${SYSTEM_PROMPT}\n\n${last.text}`;
-  }
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user',   content },
+  ];
 
-  const createParams = { model, ...(oSeries ? { max_completion_tokens: 4096 } : { max_tokens: 4096 }), messages };
-  console.log(`[aiService] OpenAI createParams keys=${Object.keys(createParams).filter(k=>k!=='messages').join(',')} model=${model} oSeries=${oSeries}`);
-  const response = await client.chat.completions.create(createParams);
+  console.log(`[aiService] extractScannedWithOpenAI model=${model} pages=${pages.length}`);
+  const response = await client.chat.completions.create({
+    model,
+    max_completion_tokens: 4096,
+    messages,
+  });
 
   return parseAIResponse(response.choices[0]?.message?.content || '');
 }
