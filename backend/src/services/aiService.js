@@ -302,6 +302,9 @@ async function extractWithOpenAI(base64Image, mimeType) {
   };
 
   const response = await client.chat.completions.create(createParams);
+  const content = response.choices[0]?.message?.content || '';
+  return parseAIResponse(content);
+}
 
 async function extractWithAnthropic(base64Image, mimeType) {
   const Anthropic = require('@anthropic-ai/sdk');
