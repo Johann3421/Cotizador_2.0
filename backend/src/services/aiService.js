@@ -250,7 +250,10 @@ function getMimeType(imagePath) {
  * Estos modelos usan max_completion_tokens en vez de max_tokens y no soportan role:system.
  */
 function isOSeriesModel(model) {
-  return /^o\d/i.test(model);
+  if (!model) return false;
+  const m = String(model).toLowerCase();
+  // Covers: o1, o3, o4-mini, gpt-4o, gpt-4o-mini, or models starting with 'o'
+  return m.startsWith('o') || m.includes('gpt-4o') || /^o\d/.test(m);
 }
 
 /**
