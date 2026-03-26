@@ -438,7 +438,7 @@ async function renderPdfPagesToImages(pdfBuffer) {
 
     const maxPages = Math.min(pdf.numPages, 4);
     const pages    = [];
-    const SCALE    = 2.0;
+    const SCALE    = 3.0; // mayor escala = texto más legible para el modelo de visión
 
     for (let i = 1; i <= maxPages; i++) {
       const page     = await pdf.getPage(i);
@@ -521,7 +521,17 @@ async function extractScannedWithOpenAI(pages) {
   }
   content.push({
     type: 'text',
-    text: `Estas ${pages.length} imagen(es) son páginas de un documento PDF escaneado con requerimientos técnicos de equipos de cómputo. Analiza TODAS las imágenes y extrae todos los requerimientos técnicos que encuentres. Responde SOLO con el JSON.`,
+    text: `Estas ${pages.length} imagen(es) son páginas de un documento PDF. Puede ser:
+- Una "Guía de Internamiento" o "Orden de Compra" del sistema SIGA de Perú
+- Un documento de requerimientos o licitación
+- Una ficha técnica de equipos de cómputo
+
+INSTRUCCIONES:
+1. Lee con atención TODAS las tablas e ítems del documento
+2. Para documentos SIGA/Orden de Compra: busca en la columna "Descripción" o "Descripción Detallada" las especificaciones técnicas (procesador, RAM, almacenamiento, etc.)
+3. El texto de las especificaciones puede estar en UNA SOLA CELDA con saltos de línea — léelo completo
+4. Extrae TODOS los equipos de cómputo (computadoras de escritorio, laptops, monitores si corresponde)
+5. Responde SOLO con el JSON, sin texto adicional.`,
   });
 
   const messages = [
@@ -536,7 +546,9 @@ async function extractScannedWithOpenAI(pages) {
     messages,
   });
 
-  return parseAIResponse(response.choices[0]?.message?.content || '');
+  const rawContent = response.choices[0]?.message?.content || '';
+  console.log(`[aiService] OpenAI Vision respuesta cruda (primeros 500 chars): ${rawContent.substring(0, 500)}`);
+  return parseAIResponse(rawContent);
 }
 
 /**
@@ -560,7 +572,17 @@ async function extractScannedWithAnthropic(pages) {
   }
   content.push({
     type: 'text',
-    text: `Estas ${pages.length} imagen(es) son páginas de un documento PDF escaneado con requerimientos técnicos de equipos de cómputo. Analiza TODAS las imágenes y extrae todos los requerimientos técnicos que encuentres. Responde SOLO con el JSON.`,
+    text: `Estas ${pages.length} imagen(es) son páginas de un documento PDF. Puede ser:
+- Una "Guía de Internamiento" o "Orden de Compra" del sistema SIGA de Perú
+- Un documento de requerimientos o licitación
+- Una ficha técnica de equipos de cómputo
+
+INSTRUCCIONES:
+1. Lee con atención TODAS las tablas e ítems del documento
+2. Para documentos SIGA/Orden de Compra: busca en la columna "Descripción" o "Descripción Detallada" las especificaciones técnicas
+3. El texto de los specs puede estar en una sola celda con saltos de línea — léelo completo
+4. Extrae TODOS los equipos de cómputo que encuentres
+5. Responde SOLO con el JSON, sin texto adicional.`,
   });
 
   const response = await client.messages.create({
