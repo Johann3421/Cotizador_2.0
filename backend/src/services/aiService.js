@@ -303,7 +303,8 @@ async function extractWithOpenAI(base64Image, mimeType) {
     messages,
     ...(oSeries ? { max_completion_tokens: 4096 } : { max_tokens: 4096 }),
   };
-
+  const paramKeys = Object.keys(createParams).filter(k => k !== 'messages');
+  console.log(`[aiService] OpenAI createParams keys=${paramKeys.join(',')} model=${model} oSeries=${oSeries}`);
   const response = await client.chat.completions.create(createParams);
   const content = response.choices[0]?.message?.content || '';
   return parseAIResponse(content);
@@ -555,11 +556,9 @@ async function extractScannedWithOpenAI(pages) {
     last.text = `${SYSTEM_PROMPT}\n\n${last.text}`;
   }
 
-  const response = await client.chat.completions.create({
-    model,
-    ...(oSeries ? { max_completion_tokens: 4096 } : { max_tokens: 4096 }),
-    messages,
-  });
+  const createParams = { model, ...(oSeries ? { max_completion_tokens: 4096 } : { max_tokens: 4096 }), messages };
+  console.log(`[aiService] OpenAI createParams keys=${Object.keys(createParams).filter(k=>k!=='messages').join(',')} model=${model} oSeries=${oSeries}`);
+  const response = await client.chat.completions.create(createParams);
 
   return parseAIResponse(response.choices[0]?.message?.content || '');
 }
