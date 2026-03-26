@@ -113,6 +113,49 @@ Tu trabajo es extraer especificaciones técnicas de equipos de cómputo desde CU
 IMPORTANTE: Si el documento es una guía de remisión, factura u orden de compra, extrae las especificaciones de la columna de "Descripción" o "Descripción Detallada" de cada ítem que sea equipo de cómputo. Ignora ítems que no sean equipos (monitores separados, accesorios, etc. a menos que formen parte del requerimiento).
 
 ════════════════════════════════════════════════════════
+GLOSARIO DEL SISTEMA SIGA (PERÚ) — LEER OBLIGATORIAMENTE
+════════════════════════════════════════════════════════
+Los documentos del sistema logístico SIGA del Estado Peruano usan abreviaturas propias:
+
+MEMORIA RAM:
+- "ROM: XX GB DDR5" — en SIGA "ROM:" significa MEMORIA RAM (no ROM). Ej: "ROM: 32 GB DDR5 4800" = 32 GB DDR5 a 4800 MHz.
+- "600 MHZ" después de la velocidad es el ancho de banda, NO la frecuencia principal. La frecuencia es el número anterior (4800).
+
+ALMACENAMIENTO:
+- "TBW.2 SSD NVMe" = "TB M.2 SSD NVMe" (la W es un artefacto de escaneo/OCR, en realidad es M).
+- "GBW.2" = "GB M.2"
+
+PROCESADOR:
+- Modelos con espacio como "I7- 14700" o "I7 -13700" son UN SOLO modelo: "i7-14700", "i7-13700".
+- NUNCA interpretes "I7- 14700" como "i7-11700" — lee el número completo después del guión.
+- El número de generación de Intel Core i7-14700 es la 14va generación (los primeros 2 dígitos = generación).
+
+SISTEMA OPERATIVO:
+- "WINDOWS11" = Windows 11 (sin espacio ni versión Pro/Home a menos que se especifique).
+- "SIST OPER: WINDOWS11" = Sistema Operativo Windows 11.
+
+CONECTIVIDAD EN SIGA:
+- "LAN: SI" = tiene LAN (Ethernet).
+- "WLAN: SI" o "WLAN: STTBS" = tiene Wi-Fi (STTBS es artefacto OCR de "SÍ").
+- "VGA: NO" o "VGA: NODPMT" = NO tiene VGA (NODPMT es "NO"). Ignorar el resto de la cadena.
+- "DPMT: SI" = tiene DisplayPort/Thunderbolt.
+- "HDMI: SI" = tiene HDMI.
+
+SUITE OFIMÁTICA:
+- "SUITE OFIMATICA: NO" = no incluye suite ofimática.
+- "SUITE OFIMATICA: SI ESPAÑOL" = incluye suite ofimática en español.
+
+CÓDIGOS QUE DEBES IGNORAR:
+- Los números de código como "74689500001" o "85228335024" son CÓDIGOS DE CATÁLOGO del ítem, NO especificaciones.
+- Códigos como "1073-2025" (CERTIFICACIÓN SIAE NRO.) son números de certificación, no modelos.
+- "G.F: 36 MESES" = Garantía de funcionamiento 36 meses.
+- "ON-SITE" = tipo de servicio de garantía, no es una especificación de hardware.
+
+MODELO DE REFERENCIA EN SIGA:
+- Busca texto como "UNIDAD KENYA511" o "UNIDAD [MARCA][CÓDIGO]" — ese código es el modelo_referencia.
+- Ej: "UNIDAD KENYA511PROD" → modelo_referencia: "KENYA511".
+
+════════════════════════════════════════════════════════
 REGLAS DE EXTRACCIÓN — LEER ANTES DE PROCESAR
 ════════════════════════════════════════════════════════
 
@@ -552,7 +595,7 @@ INSTRUCCIONES:
   });
 
   const rawContent = response.choices[0]?.message?.content || '';
-  console.log(`[aiService] OpenAI Vision respuesta cruda (primeros 500 chars): ${rawContent.substring(0, 500)}`);
+  console.log(`[aiService] OpenAI Vision respuesta cruda (primeros 2000 chars):\n${rawContent.substring(0, 2000)}`);
   return parseAIResponse(rawContent);
 }
 
