@@ -27,12 +27,18 @@ const fileFilter = (req, file, cb) => {
     'image/png',
     'image/webp',
     'application/pdf',
+    // Word documents
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/msword',
+    // Excel spreadsheets
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
   ];
 
   if (allowedMimes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error(`Formato no soportado: ${file.mimetype}. Usa JPG, PNG, WebP o PDF.`), false);
+    cb(new Error(`Formato no soportado: ${file.mimetype}. Usa JPG, PNG, WebP, PDF, DOCX o XLSX.`), false);
   }
 };
 

@@ -138,9 +138,21 @@ export default function NewQuote() {
       const data = await searchProducts(requirementId, equipos);
       setSearchResults(data.resultados || []);
 
-      // Inicializar tabs activos
+      // Inicializar tabs activos: seleccionar la marca con el producto de mayor score
+      const MARCAS = ['kenya', 'lenovo', 'hp'];
       const tabs = {};
-      data.resultados.forEach((_, i) => { tabs[i] = 'kenya'; });
+      data.resultados.forEach((r, i) => {
+        let bestBrand = 'kenya';
+        let bestScore = -1;
+        for (const m of MARCAS) {
+          const prods = r[`productos_${m}`] || [];
+          if (prods.length > 0 && (prods[0].score ?? 0) > bestScore) {
+            bestScore = prods[0].score ?? 0;
+            bestBrand = m;
+          }
+        }
+        tabs[i] = bestBrand;
+      });
       setActiveTab(tabs);
 
       setStep(3);
@@ -282,6 +294,26 @@ export default function NewQuote() {
                 Experimenta el poder de la Inteligencia Artificial extrayendo especificaciones automáticamente. Tienes <b className="text-white bg-white/20 px-1 rounded">1 intento</b> gratuito por IP. ¡Sube un requerimiento técnico y sorpréndete!
               </p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Trial Expired Contact Notice */}
+      {isTrial && step === 1 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3 animate-fade-in">
+          <span className="text-2xl flex-shrink-0">⏰</span>
+          <div className="flex-1">
+            <p className="font-semibold text-amber-800">¿Ya usaste tu intento de prueba?</p>
+            <p className="text-sm text-amber-700 mt-1">
+              El uso de prueba de la cuenta ha finalizado. Para continuar usando el Cotizador Inteligente
+              con acceso completo y sin límites, contáctanos para activar tu cuenta oficial.
+            </p>
+            <a
+              href="mailto:ventas@kenyatechnology.com"
+              className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-amber-700 underline hover:text-amber-900 transition-colors"
+            >
+              Contactar a Kenya Technology para obtener una cuenta oficial →
+            </a>
           </div>
         </div>
       )}

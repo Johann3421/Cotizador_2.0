@@ -10,9 +10,15 @@ export default function UploadZone({ onFileSelect, disabled }) {
   const handleFile = useCallback((file) => {
     if (!file) return;
 
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    const allowedTypes = [
+      'image/jpeg', 'image/png', 'image/webp', 'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+    ];
     if (!allowedTypes.includes(file.type)) {
-      alert('Formato no soportado. Usa JPG, PNG, WebP o PDF.');
+      alert('Formato no soportado. Usa JPG, PNG, WebP, PDF, DOCX o XLSX.');
       return;
     }
 
@@ -91,7 +97,7 @@ export default function UploadZone({ onFileSelect, disabled }) {
             ref={inputRef}
             type="file"
             className="hidden"
-            accept="image/jpeg,image/png,image/webp,application/pdf"
+            accept="image/jpeg,image/png,image/webp,application/pdf,.pdf,.docx,.doc,.xlsx,.xls"
             onChange={handleChange}
             disabled={disabled}
           />
@@ -114,18 +120,21 @@ export default function UploadZone({ onFileSelect, disabled }) {
               </p>
             </div>
 
-            <div className="flex items-center gap-4 text-xs text-gray-400">
+            <div className="flex items-center gap-4 text-xs text-gray-400 flex-wrap justify-center">
               <span className="flex items-center gap-1">
                 <Image className="w-3.5 h-3.5" /> JPG, PNG, WebP
               </span>
               <span className="flex items-center gap-1">
                 <FileText className="w-3.5 h-3.5" /> PDF
               </span>
+              <span className="flex items-center gap-1">
+                <FileText className="w-3.5 h-3.5" /> DOCX, XLSX
+              </span>
               <span>Máx. 10MB</span>
             </div>
 
             <p className="text-xs text-gray-400 mt-2">
-              Soporta: correos, capturas de pantalla, documentos escaneados
+              Soporta: imágenes, PDFs, documentos Word y hojas de cálculo
             </p>
           </div>
         </div>

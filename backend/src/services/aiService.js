@@ -3,9 +3,24 @@ const path = require('path');
 const axios = require('axios');
 
 /**
- * Extrae texto plano de un PDF usando pdfjs-dist (sin binarios externos)
+ * Extrae texto plano de un PDF.
+ * Estrategia: pdf-parse primero (más fiable con PDFs gubernamentales),
+ * luego pdfjs-dist como fallback.
  */
 async function extractTextFromPdf(pdfBuffer) {
+  // --- Estrategia 1: pdf-parse (más robusto para PDFs vectoriales) ---
+  try {
+    const pdfparse = require('pdf-parse');
+    const data = await pdfparse(pdfBuffer);
+    if (data && data.text && data.text.trim().length >= 20) {
+      console.log(`[aiService] pdf-parse OK: ${data.text.trim().length} caracteres, ${data.numpages} páginas`);
+      return data.text.trim();
+    }
+  } catch (e) {
+    console.warn('[aiService] pdf-parse falló:', e.message);
+  }
+
+  // --- Estrategia 2: pdfjs-dist ---
   try {
     let pdfjsLib;
     try { pdfjsLib = require('pdfjs-dist'); }
@@ -28,21 +43,52 @@ async function extractTextFromPdf(pdfBuffer) {
       }
       texto += '\n';
     }
-    return texto.trim();
-  } catch (err) {
-    console.warn('[aiService] pdfjs extra failed:', err.message);
-    // Intentar fallback con pdf-parse (puede extraer texto cuando pdfjs falla)
-    try {
-      const pdfparse = require('pdf-parse');
-      const data = await pdfparse(pdfBuffer || Buffer.from(''));
-      if (data && data.text && data.text.trim().length > 10) {
-        return data.text.trim();
-      }
-    } catch (e) {
-      console.warn('[aiService] pdf-parse fallback failed:', e.message);
+    if (texto.trim().length >= 20) {
+      console.log(`[aiService] pdfjs OK: ${texto.trim().length} caracteres`);
+      return texto.trim();
     }
+  } catch (err) {
+    console.warn('[aiService] pdfjs falló:', err.message);
+  }
 
-    // Si todo falla, retornar null para que el llamador pueda decidir OCR u otra acción
+  // PDF escaneado — sin texto extraíble
+  return null;
+}
+
+/**
+ * Extrae texto plano de un archivo DOCX usando mammoth.
+ */
+async function extractTextFromDocx(buffer) {
+  try {
+    const mammoth = require('mammoth');
+    const result  = await mammoth.extractRawText({ buffer });
+    const text    = (result.value || '').trim();
+    console.log(`[aiService] DOCX extraído: ${text.length} caracteres`);
+    return text.length >= 10 ? text : null;
+  } catch (e) {
+    console.warn('[aiService] DOCX extracción falló:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Extrae texto plano de un archivo XLSX usando xlsx (SheetJS).
+ * Lee todas las hojas y convierte a texto tabulado.
+ */
+function extractTextFromXlsx(buffer) {
+  try {
+    const XLSX = require('xlsx');
+    const wb   = XLSX.read(buffer, { type: 'buffer' });
+    let text   = '';
+    for (const sheetName of wb.SheetNames) {
+      const ws  = wb.Sheets[sheetName];
+      const csv = XLSX.utils.sheet_to_csv(ws, { blankrows: false });
+      if (csv.trim()) text += `=== Hoja: ${sheetName} ===\n${csv}\n\n`;
+    }
+    console.log(`[aiService] XLSX extraído: ${text.trim().length} caracteres, ${wb.SheetNames.length} hoja(s)`);
+    return text.trim().length >= 10 ? text.trim() : null;
+  } catch (e) {
+    console.warn('[aiService] XLSX extracción falló:', e.message);
     return null;
   }
 }
@@ -182,12 +228,16 @@ function imageToBase64(imagePath) {
 function getMimeType(imagePath) {
   const ext = path.extname(imagePath).toLowerCase();
   const mimeMap = {
-    '.jpg': 'image/jpeg',
+    '.jpg':  'image/jpeg',
     '.jpeg': 'image/jpeg',
-    '.png': 'image/png',
+    '.png':  'image/png',
     '.webp': 'image/webp',
-    '.gif': 'image/gif',
-    '.pdf': 'application/pdf',
+    '.gif':  'image/gif',
+    '.pdf':  'application/pdf',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.doc':  'application/msword',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xls':  'application/vnd.ms-excel',
   };
   return mimeMap[ext] || 'image/jpeg';
 }
@@ -568,7 +618,22 @@ async function extractRawPdfWithAnthropic(base64Pdf) {
 }
 
 /**
- * Función principal: Extrae specs de una imagen o PDF usando la AI configurada
+ * Envía texto extraído a la AI como consulta de texto.
+ * Usado para PDF con texto, DOCX y XLSX.
+ */
+async function extractFromText(texto, tipoDoc, provider) {
+  const base64Text = Buffer.from(texto, 'utf8').toString('base64');
+  const mimeType   = 'application/pdf'; // trigger the isPdf branch (text mode)
+  console.log(`[aiService] Extrayendo specs de ${tipoDoc} (${texto.length} chars) con ${provider}...`);
+  if (provider === 'anthropic') {
+    return await extractWithAnthropic(base64Text, mimeType);
+  } else {
+    return await extractWithOpenAI(base64Text, mimeType);
+  }
+}
+
+/**
+ * Función principal: Extrae specs de una imagen, PDF, DOCX o XLSX usando la AI configurada
  */
 async function extractSpecsFromImage(imagePath) {
   const provider = (process.env.AI_PROVIDER || 'openai').toLowerCase();
@@ -577,42 +642,53 @@ async function extractSpecsFromImage(imagePath) {
     throw new Error('AI_API_KEY no configurada. Agrega tu API key en las variables de entorno.');
   }
 
-  const mimeType = getMimeType(imagePath);
-  const isPdf    = mimeType === 'application/pdf';
+  const mimeType  = getMimeType(imagePath);
+  const isPdf     = mimeType === 'application/pdf';
+  const isDocx    = mimeType.includes('wordprocessingml') || mimeType === 'application/msword';
+  const isXlsx    = mimeType.includes('spreadsheetml')   || mimeType === 'application/vnd.ms-excel';
+  const isOffice  = isDocx || isXlsx;
 
-  let base64Image;
+  const absolutePath = path.isAbsolute(imagePath)
+    ? imagePath
+    : path.join(__dirname, '../../uploads', imagePath);
+
   let result;
 
-  if (isPdf) {
-    const absolutePath = path.isAbsolute(imagePath)
-      ? imagePath
-      : path.join(__dirname, '../../uploads', imagePath);
+  // ── DOCX ──────────────────────────────────────────────────
+  if (isDocx) {
+    const buffer = fs.readFileSync(absolutePath);
+    const texto  = await extractTextFromDocx(buffer);
+    if (!texto) throw new Error('No se pudo extraer texto del archivo Word. Prueba guardarlo como PDF.');
+    result = await extractFromText(texto, 'DOCX', provider);
+
+  // ── XLSX ──────────────────────────────────────────────────
+  } else if (isXlsx) {
+    const buffer = fs.readFileSync(absolutePath);
+    const texto  = extractTextFromXlsx(buffer);
+    if (!texto) throw new Error('No se pudo extraer datos del archivo Excel. Prueba guardarlo como PDF.');
+    result = await extractFromText(texto, 'XLSX', provider);
+
+  // ── PDF ───────────────────────────────────────────────────
+  } else if (isPdf) {
     const pdfBuffer = fs.readFileSync(absolutePath);
     
-    // Intentar extraer texto del PDF
+    // 1. Intentar extraer texto (pdf-parse primero, luego pdfjs)
     const texto = await extractTextFromPdf(pdfBuffer);
     
     if (texto && texto.trim().length >= 20) {
       // PDF con texto embebido → enviar como texto
-      console.log(`[aiService] PDF con texto → ${texto.length} caracteres extraídos`);
-      base64Image = Buffer.from(texto, 'utf8').toString('base64');
-
-      console.log(`Extrayendo specs con ${provider} (${process.env.AI_MODEL || 'default'})...`);
-      if (provider === 'anthropic') {
-        result = await extractWithAnthropic(base64Image, mimeType);
-      } else {
-        result = await extractWithOpenAI(base64Image, mimeType);
-      }
+      console.log(`[aiService] PDF con texto → ${texto.length} caracteres`);
+      result = await extractFromText(texto, 'PDF-texto', provider);
     } else {
       // PDF escaneado (sin texto) → usar Vision API con imágenes renderizadas
-      console.log(`[aiService] PDF escaneado detectado (${texto ? texto.length : 0} chars) → procesando con Vision API`);
+      console.log(`[aiService] PDF escaneado (${texto ? texto.length : 0} chars) → Vision API`);
       result = await extractScannedPdfWithVision(pdfBuffer, provider);
     }
+
+  // ── IMAGEN ────────────────────────────────────────────────
   } else {
-    // Imagen normal → enviar directo
-    base64Image = imageToBase64(imagePath);
-    
-    console.log(`Extrayendo specs con ${provider} (${process.env.AI_MODEL || 'default'})...`);
+    const base64Image = imageToBase64(imagePath);
+    console.log(`[aiService] Imagen → ${provider} (${process.env.AI_MODEL || 'default'})`);
     if (provider === 'anthropic') {
       result = await extractWithAnthropic(base64Image, mimeType);
     } else {
