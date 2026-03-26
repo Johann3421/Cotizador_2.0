@@ -276,9 +276,12 @@ async function extractWithOpenAI(base64Image, mimeType) {
     },
   ];
 
-  console.log(`[aiService] extractWithOpenAI model=${model} isPdf=${isPdf}`);
+  // Para vision usar AI_VISION_MODEL (default gpt-4o) — gpt-5-mini no soporta vision
+  const visionModel = process.env.AI_VISION_MODEL || 'gpt-4o';
+  const effectiveModel = isPdf ? model : visionModel;
+  console.log(`[aiService] extractWithOpenAI model=${effectiveModel} (AI_MODEL=${model}, AI_VISION_MODEL=${process.env.AI_VISION_MODEL || 'n/a'}) isPdf=${isPdf}`);
   const response = await client.chat.completions.create({
-    model,
+    model: effectiveModel,
     max_completion_tokens: 4096,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -507,7 +510,9 @@ async function extractScannedPdfWithVision(pdfBuffer, provider) {
 async function extractScannedWithOpenAI(pages) {
   const OpenAI = require('openai');
   const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
-  const model  = process.env.AI_MODEL || 'gpt-4o';
+  // Siempre usar AI_VISION_MODEL para vision (default gpt-4o).
+  // gpt-5-mini y modelos de texto no tienen vision confiable.
+  const model  = process.env.AI_VISION_MODEL || 'gpt-4o';
 
   const content = [];
   for (let i = 0; i < pages.length; i++) {
