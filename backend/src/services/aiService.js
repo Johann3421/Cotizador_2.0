@@ -303,7 +303,6 @@ async function extractWithOpenAI(base64Image, mimeType) {
 
   const response = await client.chat.completions.create(createParams);
 
- */
 async function extractWithAnthropic(base64Image, mimeType) {
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey: process.env.AI_API_KEY });
