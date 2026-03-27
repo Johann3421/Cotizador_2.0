@@ -557,7 +557,7 @@ async function extractScannedWithOpenAI(pages) {
   const OpenAI = require('openai');
   const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
   const visionModel = process.env.AI_VISION_MODEL || 'gpt-4o';
-  const textModel   = process.env.AI_MODEL || 'gpt-4o';
+  // textModel eliminado: usamos visionModel (gpt-4o) para ambos pasos.
 
   // ── PASO 1: OCR — transcribir el texto exactamente como aparece ─────────────
   const ocrContent = [];
@@ -592,17 +592,38 @@ REGLAS ESTRICTAS:
     throw new Error('El modelo de visión no pudo leer el documento. Intenta con una imagen de mayor resolución.');
   }
 
-  // ── PASO 2: Extracción — el modelo de texto interpreta la transcripción ─────
-  console.log(`[aiService] Paso 2 Extracción model=${textModel}`);
+  // ── PASO 2: Extracción — usar visionModel (gpt-4o), NO textModel (gpt-5-mini) ─
+  // gpt-5-mini no tiene capacidad suficiente para filtrar OCR ruidoso de múltiples páginas.
+  console.log(`[aiService] Paso 2 Extracción model=${visionModel}`);
+
+  const extractionPrompt = [
+    'El siguiente texto fue transcrito mediante OCR desde un documento oficial peruano (sistema SIGA o similar).',
+    '',
+    'TAREA: Extrae ÚNICAMENTE los equipos de CÓMPUTO (computadoras de escritorio, laptops, monitores, workstations).',
+    'Ignora completamente: obras de construcción, servicios, mobiliario, alimentos, contratos, datos de proveedor, importes/totales, números de expediente, firmas, RUC, fechas, sellos.',
+    '',
+    'REGLAS CRÍTICAS:',
+    '1. USA SOLO los valores que aparecen literalmente en el texto OCR — NUNCA inventes ni rellenes con conocimiento propio.',
+    '2. Si un campo no está en el texto → null. NUNCA pongas un valor genérico o "típico".',
+    '3. El OCR puede tener ruido (letras cambiadas, espacios extra). Interpreta con sentido técnico:',
+    '   "I7- 14700" = i7-14700 | "TBW.2" o "M.2" = M.2 NVMe | "ROM:" = RAM (en SIGA) | "WINDOWS11" = Windows 11 | "JDR5" o "DDR5" = DDR5',
+    '4. Si hay ítems mixtos (PCs + otros), extrae SOLO los que son hardware de cómputo.',
+    '5. Si el equipo tiene specs parciales, extrae lo que haya y pon null en el resto.',
+    '6. NUNCA devuelvas "equipos": [] si el texto menciona alguna computadora, PC, laptop o monitor — busca con cuidado.',
+    '',
+    'Responde SOLO con el JSON, sin explicaciones.',
+    '',
+    '---TRANSCRIPCIÓN OCR---',
+    ocrText,
+    '---FIN TRANSCRIPCIÓN---',
+  ].join('\n');
+
   const extractResponse = await client.chat.completions.create({
-    model: textModel,
+    model: visionModel,
     max_completion_tokens: 4096,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
-      {
-        role: 'user',
-        content: `El siguiente texto fue transcrito mediante OCR desde un documento oficial peruano (posiblemente del sistema SIGA).\nExtrae las especificaciones de TODOS los equipos de cómputo que encuentres.\nUSA SOLO lo que está escrito en el texto — NUNCA uses tu conocimiento previo para rellenar campos que no aparecen.\nSi un campo no está en el texto, ponlo en null.\nResponde SOLO con el JSON.\n\n---TRANSCRIPCIÓN OCR---\n${ocrText}\n---FIN TRANSCRIPCIÓN---`,
-      },
+      { role: 'user',   content: extractionPrompt },
     ],
   });
 
@@ -639,15 +660,32 @@ async function extractScannedWithAnthropic(pages) {
   const ocrText = ocrResponse.content[0]?.text || '';
   console.log(`[aiService] Anthropic OCR transcripción (primeros 1000):\n${ocrText.substring(0, 1000)}`);
 
-  // Paso 2: Extracción
+  // Paso 2: Extracción con prompt robusto
+  const extractionPrompt = [
+    'El siguiente texto fue transcrito mediante OCR desde un documento oficial peruano (sistema SIGA o similar).',
+    '',
+    'TAREA: Extrae ÚNICAMENTE los equipos de CÓMPUTO (computadoras de escritorio, laptops, monitores, workstations).',
+    'Ignora completamente: obras de construcción, servicios, mobiliario, alimentos, contratos, datos de proveedor, importes/totales, números de expediente, firmas, RUC, fechas, sellos.',
+    '',
+    'REGLAS CRÍTICAS:',
+    '1. USA SOLO los valores literales del texto OCR — NUNCA inventes ni rellenes con conocimiento propio.',
+    '2. Si un campo no está en el texto → null.',
+    '3. Interpreta el ruido OCR: "I7- 14700"=i7-14700 | "TBW.2"=M.2 | "ROM:"=RAM | "WINDOWS11"=Windows 11.',
+    '4. Si hay ítems mixtos, extrae SOLO hardware de cómputo.',
+    '5. NUNCA devuelvas equipos:[] si el texto menciona alguna PC, computadora o laptop.',
+    '',
+    'Responde SOLO con el JSON.',
+    '',
+    '---TRANSCRIPCIÓN OCR---',
+    ocrText,
+    '---FIN TRANSCRIPCIÓN---',
+  ].join('\n');
+
   const extractResponse = await client.messages.create({
     model,
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
-    messages: [{
-      role: 'user',
-      content: `El siguiente texto fue transcrito por OCR desde un documento oficial peruano.\nExtrae todos los equipos de cómputo.\nUSA SOLO lo que está en el texto — nunca rellenes con conocimiento propio.\nResponde SOLO con el JSON.\n\n---TRANSCRIPCIÓN---\n${ocrText}\n---FIN---`,
-    }],
+    messages: [{ role: 'user', content: extractionPrompt }],
   });
   return parseAIResponse(extractResponse.content[0]?.text || '');
 }
