@@ -611,25 +611,62 @@ async function extractScannedWithOpenAI(pages) {
   // Log completo — necesario para diagnosticar qué capturó el OCR
   console.log(`[aiService] OCR resultado COMPLETO (${ocrText.length} chars):\n${ocrText}`);
 
-  // ── FALLBACK: si el OCR fue rechazado, extraer specs directamente de las imágenes ─
-  if (isRefusal(ocrText)) {
-    console.warn('[aiService] OCR rechazado por el modelo — usando extracción directa de imágenes');
+  // Helper: detecta si el OCR tiene contenido útil de PC (keywords mínimas)
+  function hasUsefulPcContent(text) {
+    const t = (text || '').toUpperCase();
+    const keywords = [
+      'COMPUTADORA', 'LAPTOP', 'NOTEBOOK', 'WORKSTATION',
+      'PROCESADOR', 'INTEL', 'AMD', 'RYZEN', 'CORE I', 'CORE ULTRA', 'XEON',
+      'DDR4', 'DDR5', 'LPDDR', 'ROM:', ' RAM',
+      ' SSD', ' HDD', 'NVME', 'M.2', 'TBW.2', 'GBW.2',
+      'CPU', 'UNIDAD CENTRAL', 'KENYA', 'LENOVO', 'HP PRO',
+      'WINDOWS', 'LINUX',
+    ];
+    return keywords.some(k => t.includes(k));
+  }
+
+  // ── FALLBACK: OCR rechazado o basura → extracción directa de imágenes ────────
+  const ocrUseless = isRefusal(ocrText) || !hasUsefulPcContent(ocrText);
+  if (ocrUseless) {
+    const reason = isRefusal(ocrText) ? 'rechazado' : 'sin keywords de PC (ilegible/basura)';
+    console.warn(`[aiService] OCR inutilizable (${reason}) — extracción directa con ${visionModel}`);
     const directContent = buildImageContent(pages);
     directContent.push({
       type: 'text',
       text: [
-        'These images show a procurement or technical specification document.',
-        'Find and extract ONLY computer hardware specifications (desktop PCs, laptops, workstations, monitors).',
-        'Ignore construction works, services, furniture, food, signatures, RUC numbers, totals, dates.',
-        'Important decoding rules for abbreviations:',
-        '  - "ROM: XX GB DDR5" means RAM (not ROM)',
-        '  - "TBW.2" or "M.2" means M.2 NVMe SSD',
-        '  - "I7- 14700" means i7-14700 (space before number is OCR noise)',
-        '  - "WINDOWS11" means Windows 11',
-        '  - "SIST OPER:" means Sistema Operativo',
-        'Use ONLY what is visible in the images — never fill in values from memory.',
-        'If a field is not visible → null.',
-        'Respond with ONLY the JSON, no extra text.',
+        'This is a scanned Peruvian government procurement document (SIGA system "Orden de Compra - Guía de Internamiento").',
+        'The document may be rotated 90° or 180°. Mentally rotate it to read correctly.',
+        '',
+        'YOUR ONLY TASK: Find the DESCRIPTION column of the items table and extract computer specs.',
+        '',
+        'WHERE TO LOOK:',
+        '- There is a table with columns: Código | Cant. | Unid.Med. | Descripción | Precio',
+        '- The "Descripción" cell contains packed specs of the computer, all in one cell.',
+        '- Look for item codes like 8-digit or 10-digit numbers (e.g. 85228335024, 74689500001).',
+        '- The computer item will contain words like: COMPUTADORA, CPU, UNIDAD CENTRAL DE PROCESO, KENYA, INTEL CORE, PROCESADOR.',
+        '',
+        'SPEC PATTERNS USED IN SIGA DOCUMENTS (decode exactly like this):',
+        '  "ROM: 32 GB DDR5 4800 600 MHZ"  → RAM: 32 GB, type: DDR5, freq: 4800 MHz',
+        '  "ROM: 16 GB DDR4 3200"           → RAM: 16 GB, type: DDR4, freq: 3200 MHz',
+        '  "1 TBW.2 SSD NVMe"               → Storage: 1 TB M.2 NVMe SSD',
+        '  "512 GBW.2 SSD" / "512GB M.2"    → Storage: 512 GB M.2 SSD',
+        '  "CORE I7- 14700" / "I7 14700"    → Processor: Intel Core i7-14700 (14th gen)',
+        '  "CORE I5- 13400" / "I5 13400"    → Processor: Intel Core i5-13400 (13th gen)',
+        '  "CORE ULTRA 5 225A"              → Processor: Intel Core Ultra 5 225A',
+        '  "WINDOWS11" / "WINDOWS 11"       → OS: Windows 11',
+        '  "SUITE OFIMATICA: NO"            → no office suite',
+        '  "LAN: SI" / "WLAN: SI"           → has LAN / has WiFi',
+        '  "VGA: NO" / "VGA: NODPMT"        → no VGA',
+        '  "G.F: 36 MESES" / "G.F: P: 36"  → warranty: 36 months',
+        '  "UNIDAD KENYA..." / text "KENYA" → brand: Kenya Technology',
+        '  10+ digit codes (e.g. 85228335024) → catalog code, NOT a spec, ignore',
+        '',
+        'RULES:',
+        '1. Use ONLY values visible in the image. If a field is not visible → null.',
+        '2. NEVER fill from memory or assume typical values.',
+        '3. If the only items are monitors, printers or services (no computer CPU) → equipos: []',
+        '',
+        'Respond with ONLY the JSON, nothing else.',
       ].join('\n'),
     });
     const directResponse = await client.chat.completions.create({
