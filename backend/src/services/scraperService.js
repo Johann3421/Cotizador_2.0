@@ -12,7 +12,6 @@ const TERMINOS = {
   desktop:      { kenya: 'computadora de escritorio kenya',  lenovo: 'computadora de escritorio lenovo',  hp: 'computadora de escritorio hp'  },
   laptop:       { kenya: 'computadora portatil kenya',       lenovo: 'computadora portatil lenovo',       hp: 'computadora portatil hp'       },
   'all-in-one': { kenya: 'computadora all in one kenya',     lenovo: 'computadora all in one lenovo',     hp: 'computadora all in one hp'     },
-  monitor:      { kenya: 'monitor kenya',                    samsung: 'monitor samsung',                  lg: 'monitor lg'                    },
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -37,7 +36,7 @@ const cargarPdfSpecs = async (fichas) => {
 // ─────────────────────────────────────────────────────────────
 const searchCompatibleProducts = async (specs) => {
   const tipo    = (specs.tipo_equipo || 'desktop').toLowerCase();
-  const MARCAS  = tipo === 'monitor' ? ['kenya', 'samsung', 'lg'] : ['kenya', 'lenovo', 'hp'];
+  const MARCAS  = ['kenya', 'lenovo', 'hp'];
   const result  = {};
 
   for (const marca of MARCAS) {

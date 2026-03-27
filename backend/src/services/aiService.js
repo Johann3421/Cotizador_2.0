@@ -110,7 +110,7 @@ Tu trabajo es extraer especificaciones técnicas de equipos de cómputo desde CU
 - Correos electrónicos con requerimientos
 - Cualquier documento que mencione equipos de cómputo
 
-IMPORTANTE: Si el documento es una guía de remisión, factura u orden de compra, extrae las especificaciones de la columna de "Descripción" o "Descripción Detallada" de cada ítem que sea equipo de cómputo o monitor. Los monitores son equipos válidos — extráelos con tipo_equipo: "monitor". Ignora solo ítems que NO sean hardware de cómputo (servicios, obras, mobiliario, alimentos, papel, etc.).
+IMPORTANTE: Si el documento es una guía de remisión, factura u orden de compra, extrae las especificaciones de la columna de "Descripción" o "Descripción Detallada" de cada ítem que sea COMPUTADORA DE ESCRITORIO, LAPTOP o WORKSTATION. Ignora monitores, impresoras, accesorios, servicios, obras, mobiliario, alimentos y cualquier ítem que no sea una computadora completa.
 
 ════════════════════════════════════════════════════════
 GLOSARIO DEL SISTEMA SIGA (PERÚ) — LEER OBLIGATORIAMENTE
@@ -183,16 +183,15 @@ TARJETA GRÁFICA:
 - NUNCA poner tipo: "dedicada" si el documento no especifica modelo o VRAM de GPU dedicada
 
 MONITOR/PANTALLA:
-- Si el documento describe un MONITOR como ítem independiente → tipo_equipo: "monitor"
-- En laptops y all-in-one, la pantalla se incluye dentro del mismo equipo (campo "pantalla").
-- En desktops, la pantalla NO se incluye dentro del equipo — si aparece como ítem separado, es tipo_equipo: "monitor".
+- IGNORAR monitores standalone (ítems que son solo una pantalla sin CPU).
+- Solo registrar pantalla si el equipo es laptop o all-in-one (campo "pantalla" dentro del equipo).
+- En desktops, la pantalla va en null.
 
 CATEGORÍAS DE EQUIPO:
-- "CPU", "UNIDAD CENTRAL DE PROCESO", "COMPUTADORA DE ESCRITORIO" → tipo_equipo: "desktop"
-- "LAPTOP", "COMPUTADORA PORTÁTIL", "NOTEBOOK" → tipo_equipo: "laptop"
-- "ALL IN ONE", "AIO" → tipo_equipo: "all-in-one"
-- "WORKSTATION", "ESTACIÓN DE TRABAJO" → tipo_equipo: "workstation"
-- "MONITOR", "PANTALLA", "DISPLAY", "QLED", "IPS", "LED MONITOR" → tipo_equipo: "monitor"
+- "CPU", "UNIDAD CENTRAL DE PROCESO", "COMPUTADORA DE ESCRITORIO", "COMPUTADORA DE PROCESO" → tipo_equipo: "desktop"
+- "LAPTOP", "COMPUTADORA PORTÁTIL", "NOTEBOOK", "COMPUTADORA PORTATIL" → tipo_equipo: "laptop"
+- "ALL IN ONE", "AIO", "TODO EN UNO" → tipo_equipo: "all-in-one"
+- "WORKSTATION", "ESTACIÓN DE TRABAJO", "ESTACION DE TRABAJO" → tipo_equipo: "workstation"
 
 CONECTIVIDAD — Valores posibles:
 - true  = el documento dice "SI" o lo incluye como requerido
@@ -259,21 +258,6 @@ FORMATO DE RESPUESTA — JSON PURO SIN MARKDOWN
       "garantia_max_meses": 36,
       "catalogo_electronico": true,
       "uso": "ofimática/escritorio",
-      "modelo_referencia": null,
-      "notas": ""
-    },
-    {
-      "tipo_equipo": "monitor",
-      "cantidad": 1,
-      "marca": "Samsung",
-      "modelo": "QLED 32",
-      "pulgadas": 32,
-      "resolucion": "1920x1080",
-      "panel": "QLED",
-      "hdmi": true,
-      "displayport": null,
-      "vga": false,
-      "garantia_min_meses": 12,
       "modelo_referencia": null,
       "notas": ""
     }
@@ -612,6 +596,7 @@ async function extractScannedWithOpenAI(pages) {
       '- If the image is rotated, mentally rotate it and read in natural reading order.',
       '- Preserve table structure: use | to separate columns and newlines for rows.',
       '- If a word is unreadable, write [?].',
+      '- IMPORTANT: For numbers and model codes (e.g. "i7-14700", "32 GB DDR5", "512 GB NVMe"), copy each character exactly — never round or guess.',
       '- Output ONLY the transcribed text, nothing else.',
     ].join('\n'),
   });
@@ -660,43 +645,67 @@ async function extractScannedWithOpenAI(pages) {
     return parseAIResponse(directRaw);
   }
 
-  // ── PASO 2: Extracción — búsqueda por palabras clave en el OCR ─────────────
-  // IMPORTANTE: el OCR está en español; el prompt de extracción también debe ser en español.
-  // Usamos enfoque de BÚSQUEDA (qué buscar) en vez de EXCLUSIÓN (qué ignorar),
-  // porque el enfoque de exclusión causaba que gpt-4o sobreignorara el contenido pc.
+  // ── PASO 2: Extracción con cadena de pensamiento (chain-of-thought) ─────────
+  // El modelo primero busca EXPLÍCITAMENTE cada campo antes de generar el JSON.
+  // Esto fuerza precisión quirúrgica: si no encontró el campo → null, nunca hallucina.
   console.log(`[aiService] Paso 2 Extracción model=${visionModel}`);
   const extractionPrompt = [
-    'El siguiente texto fue transcrito por OCR de un documento de compra o licitación.',
+    'Tienes el siguiente texto extraído por OCR de un documento de compra, licitación o ficha técnica.',
+    'Necesitas extraer especificaciones de COMPUTADORAS DE ESCRITORIO, LAPTOPS o WORKSTATIONS.',
+    'Ignora monitores, impresoras, escáneres, servicios y cualquier ítem que no sea una computadora.',
     '',
-    'PASO 1 — BUSCA en el texto cualquier línea o celda que contenga ALGUNA de estas palabras clave:',
-    '  COMPUTADORA, COMPUTADOR, CPU, LAPTOP, NOTEBOOK, WORKSTATION, ESCRITORIO,',
-    '  PROCESADOR, INTEL, AMD, RYZEN, CORE I, CORE ULTRA, XEON,',
-    '  RAM, DDR4, DDR5, ROM: (en SIGA, "ROM:" significa RAM),',
-    '  SSD, NVMe, HDD, ALMACENAMIENTO, DISCO,',
-    '  MONITOR, PC, EQUIPO DE CÓMPUTO, COMPUTADORA DE PROCESO',
+    '════ PASO 1: BÚSQUEDA EXPLÍCITA ════',
+    'Recorre el texto línea por línea y copia la línea completa donde encuentres cada campo.',
+    'Si no encuentras el campo, escribe exactamente: NO ENCONTRADO',
     '',
-    'PASO 2 — Para cada ítem que contiene esas palabras clave, extrae sus especificaciones.',
+    'A) TIPO DE EQUIPO — busca: COMPUTADORA, CPU, LAPTOP, NOTEBOOK, DESKTOP, WORKSTATION, ALL IN ONE, EQUIPO DE COMPUTO, UNIDAD CENTRAL, COMPUTADORA DE PROCESO',
+    '   → Línea(s) encontrada(s):',
     '',
-    'GLOSARIO SIGA (aplica al interpretar el texto OCR):',
-    '  "ROM: 32 GB DDR5 4800"  → RAM: 32 GB DDR5 a 4800 MHz',
-    '  "TBW.2 SSD NVMe"        → M.2 NVMe SSD (la W es ruido OCR, es la letra M)',
-    '  "I7- 14700" o "I7 14700" → i7-14700 (el espacio es ruido OCR)',
-    '  "WINDOWS11"              → Windows 11',
-    '  "JDR5"                   → DDR5 (J es ruido OCR por D)',
-    '  "NODPMT" o "NODMT"       → NO (ej: VGA: NODPMT = sin VGA)',
-    '  "STUBS" o "STTBS"        → SÍ (ej: WLAN: STUBS = tiene WiFi)',
-    '  "4800 600 MHZ"           → 4800 MHz (600 es el ancho de banda, no la frecuencia)',
-    '  Códigos de 10+ dígitos   → códigos de catálogo, ignorar',
-    '  "SIST OPER:"             → Sistema Operativo',
-    '  "G.F: 36 MESES"          → Garantía 36 meses',
+    'B) CANTIDAD — busca columna CANT. o CANTIDAD junto al ítem de la computadora',
+    '   → Valor encontrado:',
     '',
-    'REGLAS:',
-    '1. Usa SOLO los valores que aparecen en el texto OCR. Si un campo no está → null.',
-    '2. NUNCA inventes ni rellenes con conocimiento previo.',
-    '3. NUNCA devuelvas "equipos": [] si el texto tiene "COMPUTADORA", "CPU", "PROCESADOR" o "LAPTOP" — esas son las specs, encuéntralas.',
-    '4. Si el texto es ruidoso/garbled, usa el glosario para decodificar.',
+    'C) PROCESADOR — busca: PROCESADOR, PROC:, INTEL CORE, AMD RYZEN, CORE I3, CORE I5, CORE I7, CORE I9, CORE ULTRA, XEON, RYZEN 3, RYZEN 5, RYZEN 7, RYZEN 9',
+    '   → Línea(s) encontrada(s):',
     '',
-    'Responde SOLO con el JSON.',
+    'D) MEMORIA RAM — busca: RAM, ROM: (en docs SIGA "ROM:" = RAM), MEMORIA, DDR4, DDR5, LPDDR5, GB RAM, GB DDR',
+    '   → Línea(s) encontrada(s):',
+    '',
+    'E) ALMACENAMIENTO — busca: SSD, HDD, NVMe, M.2, DISCO, ALMACENAMIENTO, TB SSD, GB SSD, TB HDD, GB HDD, TBW.2, GBW.2',
+    '   → Línea(s) encontrada(s):',
+    '',
+    'F) SISTEMA OPERATIVO — busca: WINDOWS, LINUX, SO:, SISTEMA OPERATIVO, SIST OPER, S.O.',
+    '   → Línea(s) encontrada(s):',
+    '',
+    'G) GRÁFICA — busca: GPU, GRAFICA, TARJETA DE VIDEO, VRAM, NVIDIA, AMD RADEON, INTEGRADA, DEDICADA, VIDEO CARD',
+    '   → Línea(s) encontrada(s):',
+    '',
+    'H) CONECTIVIDAD — busca: LAN, WLAN, WIFI, HDMI, VGA, DISPLAYPORT, USB, BLUETOOTH',
+    '   → Línea(s) encontrada(s):',
+    '',
+    '════ PASO 2: DECODIFICACIÓN ════',
+    'Aplica este glosario SIGA a los valores encontrados en PASO 1:',
+    '  "ROM: 32 GB DDR5 4800"       → RAM: 32 GB DDR5 @ 4800 MHz',
+    '  "1 TBW.2 SSD NVMe"           → 1 TB M.2 NVMe SSD  (W = M con ruido OCR)',
+    '  "512 GBW.2 SSD"              → 512 GB M.2 SSD',
+    '  "I7- 14700" o "I7 14700"     → Core i7-14700  (espacio = ruido OCR)',
+    '  "I5- 13400" o "CORE I 5"     → Core i5-13400',
+    '  "WINDOWS11" / "WINDOWS 11"   → Windows 11',
+    '  "JDR5" / "0DR5"              → DDR5',
+    '  "4800 600 MHZ"               → 4800 MHz  (600 = ancho de banda, no frecuencia)',
+    '  "NODPMT" / "NODMT" / "NO"    → false',
+    '  "STUBS" / "STTBS" / "SI"     → true',
+    '  "SIST OPER:"                 → Sistema Operativo',
+    '  "G.F: 36 MESES"              → garantia_min_meses: 36',
+    '  Códigos de 10+ dígitos       → ignorar (son códigos de catálogo SIGA)',
+    '',
+    '════ PASO 3: JSON FINAL ════',
+    'Usando SOLO lo encontrado en PASO 1 y decodificado en PASO 2, genera el JSON.',
+    'Reglas absolutas:',
+    '  - Campo no encontrado → null. NUNCA inventes un valor.',
+    '  - Solo monitores sin CPU → equipos: []',
+    '  - Si hay computadora → SIEMPRE incluir tipo_equipo y cantidad.',
+    '',
+    'Responde con EL JSON SOLAMENTE (no repitas los pasos ni añadas explicaciones).',
     '',
     '---TEXTO OCR---',
     ocrText,
