@@ -110,7 +110,7 @@ Tu trabajo es extraer especificaciones técnicas de equipos de cómputo desde CU
 - Correos electrónicos con requerimientos
 - Cualquier documento que mencione equipos de cómputo
 
-IMPORTANTE: Si el documento es una guía de remisión, factura u orden de compra, extrae las especificaciones de la columna de "Descripción" o "Descripción Detallada" de cada ítem que sea equipo de cómputo. Ignora ítems que no sean equipos (monitores separados, accesorios, etc. a menos que formen parte del requerimiento).
+IMPORTANTE: Si el documento es una guía de remisión, factura u orden de compra, extrae las especificaciones de la columna de "Descripción" o "Descripción Detallada" de cada ítem que sea equipo de cómputo o monitor. Los monitores son equipos válidos — extráelos con tipo_equipo: "monitor". Ignora solo ítems que NO sean hardware de cómputo (servicios, obras, mobiliario, alimentos, papel, etc.).
 
 ════════════════════════════════════════════════════════
 GLOSARIO DEL SISTEMA SIGA (PERÚ) — LEER OBLIGATORIAMENTE
@@ -183,14 +183,16 @@ TARJETA GRÁFICA:
 - NUNCA poner tipo: "dedicada" si el documento no especifica modelo o VRAM de GPU dedicada
 
 MONITOR/PANTALLA:
-- IGNORAR completamente si el equipo es un DESKTOP. Los monitores son categoría separada.
-- Solo extraer pantalla si el tipo de equipo es laptop o all-in-one.
+- Si el documento describe un MONITOR como ítem independiente → tipo_equipo: "monitor"
+- En laptops y all-in-one, la pantalla se incluye dentro del mismo equipo (campo "pantalla").
+- En desktops, la pantalla NO se incluye dentro del equipo — si aparece como ítem separado, es tipo_equipo: "monitor".
 
 CATEGORÍAS DE EQUIPO:
 - "CPU", "UNIDAD CENTRAL DE PROCESO", "COMPUTADORA DE ESCRITORIO" → tipo_equipo: "desktop"
 - "LAPTOP", "COMPUTADORA PORTÁTIL", "NOTEBOOK" → tipo_equipo: "laptop"
 - "ALL IN ONE", "AIO" → tipo_equipo: "all-in-one"
 - "WORKSTATION", "ESTACIÓN DE TRABAJO" → tipo_equipo: "workstation"
+- "MONITOR", "PANTALLA", "DISPLAY", "QLED", "IPS", "LED MONITOR" → tipo_equipo: "monitor"
 
 CONECTIVIDAD — Valores posibles:
 - true  = el documento dice "SI" o lo incluye como requerido
@@ -257,6 +259,21 @@ FORMATO DE RESPUESTA — JSON PURO SIN MARKDOWN
       "garantia_max_meses": 36,
       "catalogo_electronico": true,
       "uso": "ofimática/escritorio",
+      "modelo_referencia": null,
+      "notas": ""
+    },
+    {
+      "tipo_equipo": "monitor",
+      "cantidad": 1,
+      "marca": "Samsung",
+      "modelo": "QLED 32",
+      "pulgadas": 32,
+      "resolucion": "1920x1080",
+      "panel": "QLED",
+      "hdmi": true,
+      "displayport": null,
+      "vga": false,
+      "garantia_min_meses": 12,
       "modelo_referencia": null,
       "notas": ""
     }
