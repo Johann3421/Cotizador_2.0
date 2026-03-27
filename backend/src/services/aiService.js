@@ -548,99 +548,108 @@ async function extractScannedPdfWithVision(pdfBuffer, provider) {
 }
 
 /**
- * Envía imágenes de páginas del PDF a OpenAI Vision.
+ * Envía imágenes de páginas del PDF a OpenAI Vision usando un enfoque de 2 pasos:
+ * Paso 1 — OCR puro: el modelo de visión transcribe el texto sin presión de generar JSON.
+ * Paso 2 — Extracción: el modelo de texto interpreta la transcripción con el glosario SIGA.
+ * Esto elimina las alucinaciones porque el modelo de texto SOLO trabaja con lo que leyó el OCR.
  */
 async function extractScannedWithOpenAI(pages) {
   const OpenAI = require('openai');
   const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
-  // Siempre usar AI_VISION_MODEL para vision (default gpt-4o).
-  // gpt-5-mini y modelos de texto no tienen vision confiable.
-  const model  = process.env.AI_VISION_MODEL || 'gpt-4o';
+  const visionModel = process.env.AI_VISION_MODEL || 'gpt-4o';
+  const textModel   = process.env.AI_MODEL || 'gpt-4o';
 
-  const content = [];
+  // ── PASO 1: OCR — transcribir el texto exactamente como aparece ─────────────
+  const ocrContent = [];
   for (let i = 0; i < pages.length; i++) {
-    content.push({
+    ocrContent.push({
       type: 'image_url',
-      image_url: {
-        url: `data:image/png;base64,${pages[i].base64}`,
-        detail: 'high',
-      },
+      image_url: { url: `data:image/png;base64,${pages[i].base64}`, detail: 'high' },
     });
   }
-  content.push({
+  ocrContent.push({
     type: 'text',
-    text: `Estas ${pages.length} imagen(es) son páginas de un documento PDF. Puede ser:
-- Una "Guía de Internamiento" o "Orden de Compra" del sistema SIGA de Perú
-- Un documento de requerimientos o licitación
-- Una ficha técnica de equipos de cómputo
+    text: `Transcribe VERBATIM todo el texto visible en ${pages.length > 1 ? 'estas ' + pages.length + ' imágenes' : 'esta imagen'} (páginas de un documento oficial peruano).
 
-INSTRUCCIONES:
-1. Lee con atención TODAS las tablas e ítems del documento
-2. Para documentos SIGA/Orden de Compra: busca en la columna "Descripción" o "Descripción Detallada" las especificaciones técnicas (procesador, RAM, almacenamiento, etc.)
-3. El texto de las especificaciones puede estar en UNA SOLA CELDA con saltos de línea — léelo completo
-4. Extrae TODOS los equipos de cómputo (computadoras de escritorio, laptops, monitores si corresponde)
-5. Responde SOLO con el JSON, sin texto adicional.`,
+REGLAS ESTRICTAS:
+- Copia cada palabra, número, abreviatura y símbolo EXACTAMENTE como aparece — sin corregir ni interpretar.
+- Si el documento está rotado, gíralo mentalmente y transcribe el texto en orden de lectura natural.
+- Preserva la estructura: si hay columnas o tablas, separa con | y usa saltos de línea.
+- NO expliques ni resumas. Solo transcribe.
+- Si una palabra es ilegible, escribe [?].`,
   });
 
-  const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user',   content },
-  ];
+  console.log(`[aiService] Paso 1 OCR model=${visionModel} pages=${pages.length}`);
+  const ocrResponse = await client.chat.completions.create({
+    model: visionModel,
+    max_completion_tokens: 3000,
+    messages: [{ role: 'user', content: ocrContent }],
+  });
+  const ocrText = ocrResponse.choices[0]?.message?.content || '';
+  console.log(`[aiService] OCR transcripción completa:\n${ocrText}`);
 
-  console.log(`[aiService] extractScannedWithOpenAI model=${model} pages=${pages.length}`);
-  const response = await client.chat.completions.create({
-    model,
+  if (!ocrText.trim()) {
+    throw new Error('El modelo de visión no pudo leer el documento. Intenta con una imagen de mayor resolución.');
+  }
+
+  // ── PASO 2: Extracción — el modelo de texto interpreta la transcripción ─────
+  console.log(`[aiService] Paso 2 Extracción model=${textModel}`);
+  const extractResponse = await client.chat.completions.create({
+    model: textModel,
     max_completion_tokens: 4096,
-    messages,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `El siguiente texto fue transcrito mediante OCR desde un documento oficial peruano (posiblemente del sistema SIGA).\nExtrae las especificaciones de TODOS los equipos de cómputo que encuentres.\nUSA SOLO lo que está escrito en el texto — NUNCA uses tu conocimiento previo para rellenar campos que no aparecen.\nSi un campo no está en el texto, ponlo en null.\nResponde SOLO con el JSON.\n\n---TRANSCRIPCIÓN OCR---\n${ocrText}\n---FIN TRANSCRIPCIÓN---`,
+      },
+    ],
   });
 
-  const rawContent = response.choices[0]?.message?.content || '';
-  console.log(`[aiService] OpenAI Vision respuesta cruda (primeros 2000 chars):\n${rawContent.substring(0, 2000)}`);
+  const rawContent = extractResponse.choices[0]?.message?.content || '';
+  console.log(`[aiService] Extracción JSON (primeros 2000 chars):\n${rawContent.substring(0, 2000)}`);
   return parseAIResponse(rawContent);
 }
 
 /**
- * Envía imágenes de páginas del PDF a Anthropic Vision.
+ * Envía imágenes de páginas del PDF a Anthropic Vision usando 2 pasos (OCR + extracción).
  */
 async function extractScannedWithAnthropic(pages) {
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey: process.env.AI_API_KEY });
   const model  = process.env.AI_MODEL || 'claude-sonnet-4-5-20241022';
 
-  const content = [];
-  for (let i = 0; i < pages.length; i++) {
-    content.push({
+  // Paso 1: OCR
+  const ocrContent = [];
+  for (const page of pages) {
+    ocrContent.push({
       type: 'image',
-      source: {
-        type: 'base64',
-        media_type: 'image/png',
-        data: pages[i].base64,
-      },
+      source: { type: 'base64', media_type: 'image/png', data: page.base64 },
     });
   }
-  content.push({
+  ocrContent.push({
     type: 'text',
-    text: `Estas ${pages.length} imagen(es) son páginas de un documento PDF. Puede ser:
-- Una "Guía de Internamiento" o "Orden de Compra" del sistema SIGA de Perú
-- Un documento de requerimientos o licitación
-- Una ficha técnica de equipos de cómputo
-
-INSTRUCCIONES:
-1. Lee con atención TODAS las tablas e ítems del documento
-2. Para documentos SIGA/Orden de Compra: busca en la columna "Descripción" o "Descripción Detallada" las especificaciones técnicas
-3. El texto de los specs puede estar en una sola celda con saltos de línea — léelo completo
-4. Extrae TODOS los equipos de cómputo que encuentres
-5. Responde SOLO con el JSON, sin texto adicional.`,
+    text: `Transcribe VERBATIM todo el texto visible en ${pages.length > 1 ? 'estas ' + pages.length + ' imágenes' : 'esta imagen'}.\nSi el documento está rotado, gíralo mentalmente.\nPreserva la estructura con | para columnas.\nNO interpretes ni resumas — solo transcribe exactamente.`,
   });
+  const ocrResponse = await client.messages.create({
+    model,
+    max_tokens: 3000,
+    messages: [{ role: 'user', content: ocrContent }],
+  });
+  const ocrText = ocrResponse.content[0]?.text || '';
+  console.log(`[aiService] Anthropic OCR transcripción (primeros 1000):\n${ocrText.substring(0, 1000)}`);
 
-  const response = await client.messages.create({
+  // Paso 2: Extracción
+  const extractResponse = await client.messages.create({
     model,
     max_tokens: 4096,
     system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content }],
+    messages: [{
+      role: 'user',
+      content: `El siguiente texto fue transcrito por OCR desde un documento oficial peruano.\nExtrae todos los equipos de cómputo.\nUSA SOLO lo que está en el texto — nunca rellenes con conocimiento propio.\nResponde SOLO con el JSON.\n\n---TRANSCRIPCIÓN---\n${ocrText}\n---FIN---`,
+    }],
   });
-
-  return parseAIResponse(response.content[0]?.text || '');
+  return parseAIResponse(extractResponse.content[0]?.text || '');
 }
 
 /**
