@@ -606,7 +606,8 @@ async function extractScannedWithOpenAI(pages) {
     messages: [{ role: 'user', content: ocrContent }],
   });
   let ocrText = ocrResponse.choices[0]?.message?.content || '';
-  console.log(`[aiService] OCR resultado (primeros 800 chars):\n${ocrText.substring(0, 800)}`);
+  // Log completo — necesario para diagnosticar qué capturó el OCR
+  console.log(`[aiService] OCR resultado COMPLETO (${ocrText.length} chars):\n${ocrText}`);
 
   // ── FALLBACK: si el OCR fue rechazado, extraer specs directamente de las imágenes ─
   if (isRefusal(ocrText)) {
@@ -642,26 +643,47 @@ async function extractScannedWithOpenAI(pages) {
     return parseAIResponse(directRaw);
   }
 
-  // ── PASO 2: Extracción — el modelo interpreta la transcripción OCR ──────────
+  // ── PASO 2: Extracción — búsqueda por palabras clave en el OCR ─────────────
+  // IMPORTANTE: el OCR está en español; el prompt de extracción también debe ser en español.
+  // Usamos enfoque de BÚSQUEDA (qué buscar) en vez de EXCLUSIÓN (qué ignorar),
+  // porque el enfoque de exclusión causaba que gpt-4o sobreignorara el contenido pc.
   console.log(`[aiService] Paso 2 Extracción model=${visionModel}`);
   const extractionPrompt = [
-    'The following text was extracted by OCR from a procurement document.',
-    'Task: extract ONLY computer hardware specs (desktops, laptops, monitors, workstations).',
-    'Ignore: construction, services, furniture, food, supplier data, totals, signatures, RUC, dates, stamps.',
+    'El siguiente texto fue transcrito por OCR de un documento de compra o licitación.',
     '',
-    'Critical rules:',
-    '1. Use ONLY values literally present in the OCR text — NEVER fill from prior knowledge.',
-    '2. Missing field → null. Never use a "typical" or "generic" value.',
-    '3. Decode OCR noise using technical sense:',
-    '   "I7- 14700"=i7-14700 | "TBW.2"=M.2 | "ROM:"=RAM | "WINDOWS11"=Windows 11 | "JDR5"=DDR5 | "4800 600 MHZ"=4800MHz',
-    '4. NEVER return equipos:[] if any computer/PC/laptop is mentioned — search carefully.',
-    '5. Multiple items in document: extract only computer hardware items.',
+    'PASO 1 — BUSCA en el texto cualquier línea o celda que contenga ALGUNA de estas palabras clave:',
+    '  COMPUTADORA, COMPUTADOR, CPU, LAPTOP, NOTEBOOK, WORKSTATION, ESCRITORIO,',
+    '  PROCESADOR, INTEL, AMD, RYZEN, CORE I, CORE ULTRA, XEON,',
+    '  RAM, DDR4, DDR5, ROM: (en SIGA, "ROM:" significa RAM),',
+    '  SSD, NVMe, HDD, ALMACENAMIENTO, DISCO,',
+    '  MONITOR, PC, EQUIPO DE CÓMPUTO, COMPUTADORA DE PROCESO',
     '',
-    'Respond with ONLY the JSON.',
+    'PASO 2 — Para cada ítem que contiene esas palabras clave, extrae sus especificaciones.',
     '',
-    '---OCR TEXT---',
+    'GLOSARIO SIGA (aplica al interpretar el texto OCR):',
+    '  "ROM: 32 GB DDR5 4800"  → RAM: 32 GB DDR5 a 4800 MHz',
+    '  "TBW.2 SSD NVMe"        → M.2 NVMe SSD (la W es ruido OCR, es la letra M)',
+    '  "I7- 14700" o "I7 14700" → i7-14700 (el espacio es ruido OCR)',
+    '  "WINDOWS11"              → Windows 11',
+    '  "JDR5"                   → DDR5 (J es ruido OCR por D)',
+    '  "NODPMT" o "NODMT"       → NO (ej: VGA: NODPMT = sin VGA)',
+    '  "STUBS" o "STTBS"        → SÍ (ej: WLAN: STUBS = tiene WiFi)',
+    '  "4800 600 MHZ"           → 4800 MHz (600 es el ancho de banda, no la frecuencia)',
+    '  Códigos de 10+ dígitos   → códigos de catálogo, ignorar',
+    '  "SIST OPER:"             → Sistema Operativo',
+    '  "G.F: 36 MESES"          → Garantía 36 meses',
+    '',
+    'REGLAS:',
+    '1. Usa SOLO los valores que aparecen en el texto OCR. Si un campo no está → null.',
+    '2. NUNCA inventes ni rellenes con conocimiento previo.',
+    '3. NUNCA devuelvas "equipos": [] si el texto tiene "COMPUTADORA", "CPU", "PROCESADOR" o "LAPTOP" — esas son las specs, encuéntralas.',
+    '4. Si el texto es ruidoso/garbled, usa el glosario para decodificar.',
+    '',
+    'Responde SOLO con el JSON.',
+    '',
+    '---TEXTO OCR---',
     ocrText,
-    '---END OCR---',
+    '---FIN TEXTO OCR---',
   ].join('\n');
 
   const extractResponse = await client.chat.completions.create({
