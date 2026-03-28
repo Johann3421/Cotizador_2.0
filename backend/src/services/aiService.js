@@ -570,7 +570,7 @@ async function renderPdfPagesToImages(pdfBuffer) {
 
     const maxPages = Math.min(pdf.numPages, 2); // 2 págs × 2 rotaciones = 4 imágenes
     const pages    = [];
-    const SCALE    = 4.0; // 4x = mejor resolución para documentos SIGA rotados/escaneados
+    const SCALE    = 2.5; // 2.5x = calidad suficiente sin sobrepasar límites de tiles de gpt-4o
 
     for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
@@ -641,233 +641,89 @@ async function extractScannedWithOpenAI(pages) {
   const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
   const visionModel = process.env.AI_VISION_MODEL || 'gpt-4o';
 
-  // Helper: construye el array de imágenes para el mensaje de usuario
   function buildImageContent(imagePages) {
-    const content = [];
-    for (const p of imagePages) {
-      content.push({
-        type: 'image_url',
-        image_url: { url: `data:image/png;base64,${p.base64}`, detail: 'high' },
-      });
-    }
-    return content;
+    return imagePages.map(p => ({
+      type: 'image_url',
+      image_url: { url: `data:image/png;base64,${p.base64}`, detail: 'high' },
+    }));
   }
 
-  // Helper: detecta si la respuesta es un rechazo del modelo
-  function isRefusal(text) {
-    const t = (text || '').toLowerCase();
-    return (
-      t.includes("i'm sorry") ||
-      t.includes("i cannot") ||
-      t.includes("i can't") ||
-      t.includes("no puedo") ||
-      t.includes("lo siento") ||
-      t.length < 30
-    );
-  }
+  // ESTRATEGIA: Extracción visual directa — sin paso OCR intermedio.
+  // El OCR previo producía basura (textos de cabecera/página 2) que contaminaba la extracción.
+  // Ahora enviamos las imágenes (varias orientaciones) directo a gpt-4o con un prompt
+  // enfocado únicamente en la columna Descripción de la tabla de ítems SIGA.
 
-  // ── PASO 1: OCR — prompt completamente neutro para evitar filtros de seguridad ─
-  // NUNCA mencionar "oficial", "gobierno", "peruano" — eso activa los filtros.
-  const ocrContent = buildImageContent(pages);
-  ocrContent.push({
-    type: 'text',
-    text: [
-      `List every piece of text visible in ${pages.length > 1 ? 'these ' + pages.length + ' images' : 'this image'}, exactly as it appears.`,
-      'Rules:',
-      '- Copy every word, number, abbreviation and symbol verbatim — do not interpret or summarize.',
-      '- If the image is rotated, mentally rotate it and read in natural reading order.',
-      '- Preserve table structure: use | to separate columns and newlines for rows.',
-      '- If a word is unreadable, write [?].',
-      '- IMPORTANT: For numbers and model codes (e.g. "i7-14700", "32 GB DDR5", "512 GB NVMe"), copy each character exactly — never round or guess.',
-      '- Output ONLY the transcribed text, nothing else.',
-    ].join('\n'),
-  });
-
-  console.log(`[aiService] Paso 1 OCR model=${visionModel} pages=${pages.length}`);
-  const ocrResponse = await client.chat.completions.create({
-    model: visionModel,
-    max_completion_tokens: 3000,
-    messages: [{ role: 'user', content: ocrContent }],
-  });
-  let ocrText = ocrResponse.choices[0]?.message?.content || '';
-  // Log completo — necesario para diagnosticar qué capturó el OCR
-  console.log(`[aiService] OCR resultado COMPLETO (${ocrText.length} chars):\n${ocrText}`);
-
-  // Helper: detecta si el OCR tiene contenido útil de PC (keywords mínimas)
-  function hasUsefulPcContent(text) {
-    const t = (text || '').toUpperCase();
-    const keywords = [
-      'COMPUTADORA', 'LAPTOP', 'NOTEBOOK', 'WORKSTATION',
-      'PROCESADOR', 'INTEL', 'AMD', 'RYZEN', 'CORE I', 'CORE ULTRA', 'XEON',
-      'DDR4', 'DDR5', 'LPDDR', 'ROM:', ' RAM',
-      ' SSD', ' HDD', 'NVME', 'M.2', 'TBW.2', 'GBW.2',
-      'CPU', 'UNIDAD CENTRAL', 'KENYA', 'LENOVO', 'HP PRO',
-      'WINDOWS', 'LINUX',
-    ];
-    return keywords.some(k => t.includes(k));
-  }
-
-  // ── FALLBACK: OCR rechazado o basura → extracción directa de imágenes ────────
-  const ocrUseless = isRefusal(ocrText) || !hasUsefulPcContent(ocrText);
-  if (ocrUseless) {
-    const reason = isRefusal(ocrText) ? 'rechazado' : 'sin keywords de PC (ilegible/basura)';
-    console.warn(`[aiService] OCR inutilizable (${reason}) — extracción directa con ${visionModel}`);
-    const directContent = buildImageContent(pages);
-    directContent.push({
-      type: 'text',
-      text: [
-        'This is a scanned Peruvian government procurement document (SIGA system "Orden de Compra - Guía de Internamiento").',
-        'The document may be rotated 90° or 180°. Mentally rotate it to read correctly.',
-        '',
-        'YOUR ONLY TASK: Find the DESCRIPTION column of the items table and extract computer specs.',
-        '',
-        'WHERE TO LOOK:',
-        '- There is a table with columns: Código | Cant. | Unid.Med. | Descripción | Precio',
-        '- The "Descripción" cell contains packed specs of the computer, all in one cell.',
-        '- Look for item codes like 8-digit or 10-digit numbers (e.g. 85228335024, 74689500001).',
-        '- The computer item will contain words like: COMPUTADORA, CPU, UNIDAD CENTRAL DE PROCESO, KENYA, INTEL CORE, PROCESADOR.',
-        '',
-        'SPEC PATTERNS USED IN SIGA DOCUMENTS (decode exactly like this):',
-        '  "ROM: 32 GB DDR5 4800 600 MHZ"  → RAM: 32 GB, type: DDR5, freq: 4800 MHz',
-        '  "ROM: 16 GB DDR4 3200"           → RAM: 16 GB, type: DDR4, freq: 3200 MHz',
-        '  "1 TBW.2 SSD NVMe"               → Storage: 1 TB M.2 NVMe SSD',
-        '  "512 GBW.2 SSD" / "512GB M.2"    → Storage: 512 GB M.2 SSD',
-        '  "CORE I7- 14700" / "I7 14700"    → Processor: Intel Core i7-14700 (14th gen)',
-        '  "CORE I5- 13400" / "I5 13400"    → Processor: Intel Core i5-13400 (13th gen)',
-        '  "CORE ULTRA 5 225A"              → Processor: Intel Core Ultra 5 225A',
-        '  "WINDOWS11" / "WINDOWS 11"       → OS: Windows 11',
-        '  "SUITE OFIMATICA: NO"            → no office suite',
-        '  "LAN: SI" / "WLAN: SI"           → has LAN / has WiFi',
-        '  "VGA: NO" / "VGA: NODPMT"        → no VGA',
-        '  "G.F: 36 MESES" / "G.F: P: 36"  → warranty: 36 months',
-        '  "UNIDAD KENYA..." / text "KENYA" → brand: Kenya Technology',
-        '  10+ digit codes (e.g. 85228335024) → catalog code, NOT a spec, ignore',
-        '',
-        'RULES:',
-        '1. Use ONLY values visible in the image. If a field is not visible → null.',
-        '2. ANTI-HALLUCINATION: NEVER substitute a model number from memory.',
-        '   - If you see "I7- 14700", the model is i7-14700 — NOT i7-11700, NOT i5-11400.',
-        '   - Copy every digit in the processor model number exactly as printed.',
-        '   - "ROM: 32 GB" = RAM 32 GB. Do not ignore or skip the ROM: field.',
-        '3. If the only items are monitors, printers or services (no computer CPU) → equipos: []',
-        '',
-        'Respond with ONLY the JSON, nothing else.',
-      ].join('\n'),
-    });
-    const directResponse = await client.chat.completions.create({
-      model: visionModel,
-      max_completion_tokens: 4096,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user',   content: directContent },
-      ],
-    });
-    const directRaw = directResponse.choices[0]?.message?.content || '';
-    console.log(`[aiService] Extracción directa JSON (primeros 2000):\n${directRaw.substring(0, 2000)}`);
-    return parseAIResponse(directRaw);
-  }
-
-  // ── PASO 2: Extracción multimodal (chain-of-thought + imágenes originales) ──────
-  // Se envían TODAS las variantes de imagen (distintas rotaciones) junto con el texto OCR.
-  // Si el OCR perdió campos por rotación incorrecta, gpt-4o los lee directo de las imágenes.
-  console.log(`[aiService] Paso 2 Extracción multimodal model=${visionModel} (${pages.length} imgs + OCR)`);
-  const extractionPrompt = [
-    'CONTEXTO: Recibes las IMÁGENES DEL DOCUMENTO (adjuntas arriba, en múltiples orientaciones) Y el texto OCR (al final del mensaje).',
-    'El OCR puede ser PARCIAL o contener errores de rotación. Si un campo NO aparece en el OCR o parece incorrecto, BÚSCALO DIRECTAMENTE EN LAS IMÁGENES adjuntas.',
-    'Objetivo: extraer especificaciones de COMPUTADORAS DE ESCRITORIO, LAPTOPS o WORKSTATIONS. Ignora monitores, impresoras, escáneres y servicios.',
+  const SIGA_VISUAL_PROMPT = [
+    'This is a Peruvian government SIGA "Orden de Compra - Guía de Internamiento" document.',
+    'The scan may be rotated. Multiple orientations of the same page are attached — use whichever is readable.',
     '',
-    '════ PASO 1: BÚSQUEDA EXPLÍCITA ════',
-    'Busca cada campo PRIMERO en el texto OCR (fin del mensaje). Si el OCR no lo contiene o dice NO ENCONTRADO, búscalo en las IMÁGENES adjuntas (una de las orientaciones tendrá el texto legible).',
-    'Copia la línea exacta de donde lo encontraste (OCR o imagen). Si no está en ningún sitio: NO ENCONTRADO.',
+    'OBJECTIVE: Find the ITEMS TABLE (page 1) with columns:',
+    '  Código | Cant. | Unid.Med. | Descripción | Precio Unitario | Total',
     '',
-    'A) TIPO DE EQUIPO — busca: COMPUTADORA, CPU, LAPTOP, NOTEBOOK, DESKTOP, WORKSTATION, ALL IN ONE, EQUIPO DE COMPUTO, UNIDAD CENTRAL, COMPUTADORA DE PROCESO',
-    '   → Línea(s) encontrada(s):',
+    'EXTRACT only rows whose Descripción mentions:',
+    '  COMPUTADORA, CPU, UNIDAD CENTRAL DE PROCESO, KENYA, LAPTOP, NOTEBOOK, WORKSTATION',
     '',
-    'B) CANTIDAD — busca columna CANT. o CANTIDAD junto al ítem de la computadora',
-    '   → Valor encontrado:',
+    'IGNORE completely: MONITOR, LCD, IMPRESORA, ESCÁNER, MOBILIARIO, SERVICIOS.',
     '',
-    'C) PROCESADOR — busca: PROCESADOR, PROC:, INTEL CORE, AMD RYZEN, CORE I3, CORE I5, CORE I7, CORE I9, CORE ULTRA, XEON, RYZEN 3, RYZEN 5, RYZEN 7, RYZEN 9',
-    '   → Línea(s) encontrada(s): [COPIA LA LÍNEA COMPLETA EXACTA]',
-    '   → Número de modelo (copia los dígitos carácter por carácter, ej: si dice "I7- 14700" escribe "14700"):',
+    'SIGA ABBREVIATION DECODER — apply when reading the Descripción column:',
+    '  ROM: XX GB DDR5 YYYY  →  RAM: XX GB, type DDR5, freq YYYY MHz (the next number is bandwidth, not freq)',
+    '  1 TBW.2 SSD NVMe      →  Storage: 1 TB M.2 NVMe SSD  (W is OCR noise for M)',
+    '  512 GBW.2 SSD         →  Storage: 512 GB M.2 SSD',
+    '  I7- 14700             →  Processor: Core i7-14700  ←← copy every digit EXACTLY as written',
+    '  I5- 13400             →  Processor: Core i5-13400',
+    '  WINDOWS11             →  OS: Windows 11',
+    '  LAN: SI               →  lan: true',
+    '  WLAN: SI / WLAN: STUBS / WLAN: STTBS  →  wlan: true',
+    '  VGA: NODPMT / VGA: NO →  vga: false',
+    '  G.F: 36 MESES         →  garantia_min_meses: 36',
+    '  74689500001 (10-digit number) → catalog code, NOT a spec, skip it',
     '',
-    'D) MEMORIA RAM — busca: RAM:, ROM: (¡CRÍTICO! en docs SIGA "ROM: XX GB" significa RAM con capacidad XX GB), MEMORIA, DDR4, DDR5, LPDDR5, GB RAM, GB DDR',
-    '   → Línea(s) encontrada(s): [COPIA LA LÍNEA COMPLETA EXACTA, incluyendo "ROM: XX GB ..." si aparece]',
-    '   → Capacidad en GB (el número antes de "GB"):',
-    '   → Tipo de memoria (DDR4, DDR5, etc. — "JDR5" y "0DR5" = DDR5):',
+    '⚠ ANTI-HALLUCINATION RULES (mandatory):',
+    '  1. Only write values you can CLEARLY SEE in the image. Unreadable field → null.',
+    '  2. Processor model digits: copy CHARACTER BY CHARACTER. "14700" stays "14700" — never "11700".',
+    '  3. Do NOT fill fields from your training knowledge about typical Kenya or Lenovo PC specs.',
+    '  4. If the only rows are monitors/printers → {"equipos": []}',
     '',
-    'E) ALMACENAMIENTO — busca: SSD, HDD, NVMe, M.2, DISCO, ALMACENAMIENTO, TB SSD, GB SSD, TB HDD, GB HDD, TBW.2, GBW.2',
-    '   → Línea(s) encontrada(s):',
-    '',
-    'F) SISTEMA OPERATIVO — busca: WINDOWS, LINUX, SO:, SISTEMA OPERATIVO, SIST OPER, S.O.',
-    '   → Línea(s) encontrada(s):',
-    '',
-    'G) GRÁFICA — busca: GPU, GRAFICA, TARJETA DE VIDEO, VRAM, NVIDIA, AMD RADEON, INTEGRADA, DEDICADA, VIDEO CARD',
-    '   → Línea(s) encontrada(s):',
-    '',
-    'H) CONECTIVIDAD — busca: LAN, WLAN, WIFI, HDMI, VGA, DISPLAYPORT, USB, BLUETOOTH',
-    '   → Línea(s) encontrada(s):',
-    '',
-    '════ PASO 2: DECODIFICACIÓN ════',
-    'Aplica este glosario SIGA a los valores encontrados en PASO 1:',
-    '  "ROM: 32 GB DDR5 4800"       → RAM: 32 GB DDR5 @ 4800 MHz',
-    '  "1 TBW.2 SSD NVMe"           → 1 TB M.2 NVMe SSD  (W = M con ruido OCR)',
-    '  "512 GBW.2 SSD"              → 512 GB M.2 SSD',
-    '  "I7- 14700" o "I7 14700"     → Core i7-14700  (espacio = ruido OCR)',
-    '  "I5- 13400" o "CORE I 5"     → Core i5-13400',
-    '  "WINDOWS11" / "WINDOWS 11"   → Windows 11',
-    '  "JDR5" / "0DR5"              → DDR5',
-    '  "4800 600 MHZ"               → 4800 MHz  (600 = ancho de banda, no frecuencia)',
-    '  "NODPMT" / "NODMT" / "NO"    → false',
-    '  "STUBS" / "STTBS" / "SI"     → true',
-    '  "SIST OPER:"                 → Sistema Operativo',
-    '  "G.F: 36 MESES"              → garantia_min_meses: 36',
-    '  Códigos de 10+ dígitos       → ignorar (son códigos de catálogo SIGA)',
-    '',
-    '════ PASO 2.5: VERIFICACIÓN ANTES DEL JSON ════',
-    'Antes de generar el JSON, completa esta tabla:',
-    '  • Procesador hallado en PASO 1-C: ___  Dígitos del modelo copiados: ___',
-    '  • RAM hallada en PASO 1-D: ___  Capacidad GB: ___  Tipo DDR: ___',
-    '  • Almacenamiento hallado en PASO 1-E: ___  Tamaño: ___  Tipo: ___',
-    '  • Sistema Operativo hallado en PASO 1-F: ___',
-    '',
-    '════ PASO 3: JSON FINAL ════',
-    'REGLAS DE VINCULACIÓN ESTRICTA — cada campo en el JSON DEBE derivarse de la tabla de PASO 2.5:',
-    '',
-    '  1. procesador.modelo_principal: toma los dígitos exactos de PASO 2.5 "Dígitos del modelo".',
-    '     ANTI-SUSTITUCIÓN ABSOLUTA: 14700 ≠ 11700 ≠ 11400. Cópialo sin cambiar ni un dígito.',
-    '     Ejemplo: "I7- 14700" → "Core i7-14700"  |  "I5- 13400" → "Core i5-13400"',
-    '',
-    '  2. memoria_ram.capacidad_gb: usa el número de "Capacidad GB" de PASO 2.5. "ROM: 32 GB" → 32.',
-    '     memoria_ram.tipo: usa "Tipo DDR" de PASO 2.5. "JDR5"/"0DR5" → "DDR5".',
-    '',
-    '  3. sistema_operativo: usa lo decodificado de PASO 2.5. "WINDOWS11" → "Windows 11".',
-    '',
-    '  4. Campo NO encontrado en PASO 1 → null. NUNCA inventes ni rellenes con valores típicos.',
-    '  5. Solo monitores/impresoras/servicios sin CPU → equipos: []',
-    '',
-    'Responde con EL JSON SOLAMENTE (no repitas los pasos ni añadas explicaciones).',
-    '',
-    '---TEXTO OCR---',
-    ocrText,
-    '---FIN TEXTO OCR---',
+    'Return ONLY the JSON object. No explanation, no markdown fence.',
   ].join('\n');
 
-  // Adjuntar imágenes (todas las rotaciones) + texto del prompt en un solo mensaje multimodal
-  const extractContent = buildImageContent(pages);
-  extractContent.push({ type: 'text', text: extractionPrompt });
+  // Intento 1: solo página 1 (orientaciones 0° y 90°) — menor volumen, menos confusión
+  // Intento 2: todas las páginas/orientaciones si el primero no encontró nada
+  const attempts = [
+    { label: 'pag1-2orient', imgs: pages.slice(0, 2) },
+    { label: `all-${pages.length}`, imgs: pages },
+  ];
 
-  const extractResponse = await client.chat.completions.create({
-    model: visionModel,
-    max_completion_tokens: 4096,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user',   content: extractContent },
-    ],
-  });
+  for (const { label, imgs } of attempts) {
+    try {
+      const content = buildImageContent(imgs);
+      content.push({ type: 'text', text: SIGA_VISUAL_PROMPT });
 
-  const rawContent = extractResponse.choices[0]?.message?.content || '';
-  console.log(`[aiService] Extracción JSON (primeros 2000 chars):\n${rawContent.substring(0, 2000)}`);
-  return parseAIResponse(rawContent);
+      console.log(`[aiService] Direct SIGA vision [${label}] model=${visionModel} ${imgs.length} imgs`);
+      const resp = await client.chat.completions.create({
+        model: visionModel,
+        max_completion_tokens: 2048,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user',   content },
+        ],
+      });
+
+      const raw = resp.choices[0]?.message?.content || '';
+      console.log(`[aiService] Vision [${label}] result (${raw.length} chars):\n${raw.substring(0, 1500)}`);
+      const parsed = parseAIResponse(raw);
+      if (parsed.equipos && parsed.equipos.length > 0) {
+        console.log(`[aiService] ✅ Vision [${label}]: ${parsed.equipos.length} equipo(s) extraído(s)`);
+        return parsed;
+      }
+      console.log(`[aiService] Vision [${label}] → equipos:[] — siguiente intento`);
+    } catch (e) {
+      console.warn(`[aiService] Vision [${label}] error: ${e.message}`);
+    }
+  }
+
+  console.warn('[aiService] Todos los intentos de visión directa devolvieron vacío');
+  return { equipos: [] };
 }
 
 /**
@@ -1032,17 +888,33 @@ async function extractSpecsFromImage(imagePath) {
   // ── PDF ───────────────────────────────────────────────────
   } else if (isPdf) {
     const pdfBuffer = fs.readFileSync(absolutePath);
-    
-    // 1. Intentar extraer texto (pdf-parse primero, luego pdfjs)
+
+    // Umbral de calidad: el texto extraído necesita keywords de HARDWARE reales,
+    // no solo títulos de documentos ("COMPUTADORAS 501" NO es suficiente).
+    function hasMeaningfulPcText(txt) {
+      if (!txt || txt.length < 20) return false;
+      const t = txt.toUpperCase();
+      const hwKeywords = [
+        'INTEL', 'AMD', 'RYZEN', 'CORE I', 'XEON', 'CORE ULTRA',
+        'DDR4', 'DDR5', 'LPDDR', 'ROM:', 'GB RAM', 'GB DDR',
+        ' SSD', ' HDD', 'NVME', 'M.2', 'TBW.2',
+        'WINDOWS 11', 'WINDOWS11', 'LINUX',
+        'PROCESADOR:', 'MEMORIA:', 'ALMACENAMIENTO:',
+      ];
+      return hwKeywords.filter(k => t.includes(k)).length >= 2;
+    }
+
+    // 1. Intentar extraer texto embebido
     const texto = await extractTextFromPdf(pdfBuffer);
-    
-    if (texto && texto.trim().length >= 10) {
-      // PDF con texto embebido → enviar como texto
-      console.log(`[aiService] PDF con texto → ${texto.length} caracteres`);
+
+    if (hasMeaningfulPcText(texto)) {
+      // PDF con texto de hardware válido → CoT sobre el texto
+      console.log(`[aiService] PDF con specs en texto (${texto.length} chars) → CoT`);
       result = await extractFromText(texto, 'PDF-texto', provider);
     } else {
-      // PDF escaneado (sin texto) → usar Vision API con imágenes renderizadas
-      console.log(`[aiService] PDF escaneado (${texto ? texto.length : 0} chars) → Vision API`);
+      // PDF escaneado o sin specs en el texto → visión directa
+      const txtLen = texto ? texto.length : 0;
+      console.log(`[aiService] PDF sin specs en texto (${txtLen} chars) → Visión directa`);
       result = await extractScannedPdfWithVision(pdfBuffer, provider);
     }
 
