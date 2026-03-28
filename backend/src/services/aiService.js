@@ -648,117 +648,145 @@ async function extractScannedWithOpenAI(pages) {
     }));
   }
 
-  // ESTRATEGIA: Extracción visual directa — sin paso OCR intermedio.
-  // El OCR previo producía basura (textos de cabecera/página 2) que contaminaba la extracción.
-  // Ahora enviamos las imágenes (varias orientaciones) directo a gpt-4o con un prompt
-  // enfocado únicamente en la columna Descripción de la tabla de ítems SIGA.
+  // ─────────────────────────────────────────────────────────────────────
+  // ESTRATEGIA: dos llamadas separadas.
+  //
+  // CALL 1 (visión): transcripción literal de la celda Descripción del
+  //   ítem COMPUTADORA — sólo esa celda, sin decodificar nada.
+  //   Con foco estrecho hay menos oportunidad de que el modelo sustituya
+  //   dígitos del procesador o tipo de RAM con valores de entrenamiento.
+  //
+  // CALL 2 (texto puro, sin imagen): decodifica el texto SIGA → JSON.
+  //   Al no ver la imagen, el modelo no puede compensar con lo que "sabe"
+  //   sobre Kenya PCs, y está obligado a procesar lo que el texto dice.
+  // ─────────────────────────────────────────────────────────────────────
 
-  const SIGA_VISUAL_PROMPT = [
-    'This is a Peruvian government SIGA "Orden de Compra - Guía de Internamiento" document (scanned, possibly rotated).',
-    'Multiple orientations of the same page are attached. Use whichever is readable.',
+  const OCR_PROMPT = [
+    'You are reading a Peruvian government SIGA procurement document (scanned, possibly rotated).',
+    'Multiple orientations of the same page may be attached. Choose the one that is most legible.',
     '',
-    '══════════════════════════════════════════════════════',
-    'STEP 1 — VERBATIM COPY (you MUST do this before JSON)',
-    '══════════════════════════════════════════════════════',
-    'Find the table row whose Descripción column contains a COMPUTER item:',
-    '  (COMPUTADORA, CPU, UNIDAD CENTRAL DE PROCESO, KENYA, LAPTOP, NOTEBOOK, WORKSTATION)',
+    'YOUR ONLY TASK:',
+    'Find the ITEMS TABLE. Locate the row for a COMPUTER item.',
+    'Computer rows contain one of: COMPUTADORA, CPU, KENYA, UNIDAD CENTRAL, LAPTOP, NOTEBOOK, WORKSTATION.',
     '',
-    'Copy the EXACT characters you see in the scan for each line — character by character:',
-    '  PROCESSOR_LINE: <paste exact text, e.g. "PROCESADOR: INTEL CORE I7- 14700">',
-    '  RAM_LINE:       <paste exact text, e.g. "ROM: 32 GB DDR5 4800 600 MHZ">',
-    '  STORAGE_LINE:   <paste exact text, e.g. "1 TBW.2 SSD NVMe">',
-    '  OS_LINE:        <paste exact text, e.g. "SIST OPER: WINDOWS11">',
-    '  BRAND_LINE:     <paste exact text, e.g. "UNIDAD KENYA TECHNOLOGY">',
-    '  QUANTITY:       <paste exact number from the Cant. column>',
+    'Copy the ENTIRE content of the Descripción cell for that row, CHARACTER BY CHARACTER, VERBATIM.',
+    'Preserve every letter, digit, colon, slash, dot, hyphen and newline exactly as printed.',
+    'If the text wraps across multiple lines inside the cell, copy all of them.',
     '',
-    '══════════════════════════════════════════════════════',
-    'STEP 2 — DECODE (apply ONLY to what you quoted above)',
-    '══════════════════════════════════════════════════════',
-    'Use this decoder on your STEP 1 verbatim quotes:',
+    'Also copy the number from the Cant. (quantity) column for that same row.',
     '',
-    '  PROCESSOR:',
-    '    "I7- 14700" or "I7 14700"  → Core i7-14700  (14th gen — digits: 1,4,7,0,0)',
-    '    "I7- 13700"                → Core i7-13700  (13th gen — digits: 1,3,7,0,0)',
-    '    "I5- 14400"                → Core i5-14400  (14th gen)',
-    '    "I5- 13400"                → Core i5-13400  (13th gen)',
-    '    "I5- 12400"                → Core i5-12400  (12th gen)',
-    '    "CORE ULTRA 5 225A"        → Core Ultra 5 225A',
-    '    "RYZEN 5 5600"             → Ryzen 5 5600',
-    '',
-    '  RAM (SIGA calls it "ROM:" — that label means RAM, not storage):',
-    '    "ROM: 32 GB DDR5 4800 ..." → capacity_gb: 32, tipo: "DDR5", freq_mhz: 4800',
-    '    "ROM: 16 GB DDR5 4800 ..." → capacity_gb: 16, tipo: "DDR5", freq_mhz: 4800',
-    '    "ROM: 32 GB DDR4 3200 ..." → capacity_gb: 32, tipo: "DDR4", freq_mhz: 3200',
-    '    "ROM: 16 GB DDR4 3200 ..." → capacity_gb: 16, tipo: "DDR4", freq_mhz: 3200',
-    '    NOTE: "4800 600 MHZ" — the 600 is bandwidth, not frequency. freq = 4800.',
-    '',
-    '  STORAGE:',
-    '    "1 TBW.2 SSD NVMe"  → 1000 GB, M.2 NVMe SSD   (W = M, OCR noise)',
-    '    "512 GBW.2 SSD"     → 512 GB, M.2 SSD',
-    '    "256 GBW.2 SSD"     → 256 GB, M.2 SSD',
-    '    "2 TBW.2"           → 2000 GB, M.2 SSD',
-    '',
-    '  OS:  "WINDOWS11" / "WINDOWS 11" → "Windows 11"',
-    '  LAN: "LAN: SI" → true  |  "WLAN: SI" / "WLAN: STUBS" → wlan: true',
-    '  VGA: "VGA: NODPMT" / "VGA: NO" → false',
-    '  WARRANTY: "G.F: 36 MESES" → garantia_min_meses: 36',
-    '  BRAND: "UNIDAD KENYA TECHNOLOGY" / "KENYA" → "Kenya Technology"',
-    '    10-digit numbers (e.g. 74689500001) → catalog codes, NOT specs, ignore',
-    '',
-    '⛔⛔ FORBIDDEN SUBSTITUTIONS — your training data will attempt these; you MUST refuse:',
-    '  ✗ "14700" → "11700"   (they are COMPLETELY DIFFERENT CPUs, 3 generations apart)',
-    '  ✗ "13700" → "11700"   (same — never substitute generation numbers)',
-    '  ✗ "DDR5"  → "DDR4"    (different memory technologies — copy the exact letter)',
-    '  ✗ Filling RAM/CPU fields with "typical" configs you know — use ONLY what is in the image',
-    '',
-    '══════════════════════════════════════════════════════',
-    'STEP 3 — JSON (based SOLELY on STEP 2 decoded values)',
-    '══════════════════════════════════════════════════════',
-    'Every field in the JSON must trace to a verbatim quote from STEP 1.',
-    'Field not visible in the image → null.  Only monitors/printers/no-CPU → {"equipos": []}',
-    '',
-    'IGNORE the MONITOR row completely (MONITOR LCD, SAMSUNG, PANTALLA) — extract only the COMPUTER row.',
+    'Do NOT include: the monitor row, price columns, header text, stamps, signatures, page numbers.',
+    'Do NOT interpret, decode or translate anything.',
+    'Output format — two sections only:',
+    'CANTIDAD: <the number>',
+    'DESCRIPCION:',
+    '<verbatim cell text here>',
   ].join('\n');
 
-  // Intento 1: solo página 1 (orientaciones 0° y 90°) — menor volumen, menos confusión
-  // Intento 2: todas las páginas/orientaciones si el primero no encontró nada
   const attempts = [
-    { label: 'pag1-2orient', imgs: pages.slice(0, 2) },
-    { label: `all-${pages.length}`, imgs: pages },
+    { label: 'pag1', imgs: pages.slice(0, 2) },
+    { label: 'allpages', imgs: pages },
   ];
 
   for (const { label, imgs } of attempts) {
     try {
-      const content = buildImageContent(imgs);
-      content.push({ type: 'text', text: SIGA_VISUAL_PROMPT });
+      // ── CALL 1: targeted OCR ────────────────────────────────────────
+      const ocrContent = buildImageContent(imgs);
+      ocrContent.push({ type: 'text', text: OCR_PROMPT });
 
-      console.log(`[aiService] Direct SIGA vision [${label}] model=${visionModel} ${imgs.length} imgs`);
-      const resp = await client.chat.completions.create({
+      console.log(`[aiService] CALL1 targeted OCR [${label}] ${imgs.length} imgs`);
+      const ocrResp = await client.chat.completions.create({
         model: visionModel,
-        max_completion_tokens: 3500,
+        max_completion_tokens: 800,
+        messages: [{ role: 'user', content: ocrContent }],
+      });
+      const rawDesc = (ocrResp.choices[0]?.message?.content || '').trim();
+      console.log(`[aiService] CALL1 raw:\n${rawDesc}`);
+
+      if (!rawDesc || rawDesc.length < 20) {
+        console.log(`[aiService] CALL1 [${label}] too short — next attempt`);
+        continue;
+      }
+
+      // ── CALL 2: text-only decode → JSON ────────────────────────────
+      const DECODE_PROMPT = [
+        'Decode the SIGA procurement description below into a JSON object.',
+        'Apply the decoder rules EXACTLY to the text provided. Do not use your training knowledge.',
+        '',
+        '════ RAW SIGA TEXT ════',
+        rawDesc,
+        '════ END ════',
+        '',
+        'SIGA DECODER:',
+        '',
+        '  QUANTITY:',
+        '    The number on the CANTIDAD line → equipo.cantidad',
+        '',
+        '  PROCESSOR (look for PROCESADOR: or INTEL CORE or AMD RYZEN):',
+        '    Digits after "I7-" or "I7 " or "I7- " → modelo_principal (copy all 5 digits exactly)',
+        '      "I7- 14700" → "Core i7-14700"  (gen=14)',
+        '      "I7- 13700" → "Core i7-13700"  (gen=13)',
+        '      "I7- 12700" → "Core i7-12700"  (gen=12)',
+        '      "I5- 14400" → "Core i5-14400"  (gen=14)',
+        '      "I5- 13400" → "Core i5-13400"  (gen=13)',
+        '      "I5- 12400" → "Core i5-12400"  (gen=12)',
+        '      "I3- 14100" → "Core i3-14100"  (gen=14)',
+        '      "CORE ULTRA 5 225" → "Core Ultra 5 225A"',
+        '      "RYZEN 5 5600G" → "Ryzen 5 5600G"',
+        '    Generation = first two digits of the 5-digit model number.',
+        '',
+        '  RAM (in SIGA "ROM:" = RAM — it is NOT storage):',
+        '    Pattern: "ROM: <N> GB <TYPE> <FREQ> ..."',
+        '      N → capacidad_gb (integer)',
+        '      TYPE → tipo (copy exactly: DDR4, DDR5, LPDDR5, etc.)',
+        '      FREQ → primer número tras TYPE → freq_mhz',
+        '      "4800 600 MHZ" → freq_mhz=4800  (600 is bandwidth, irrelevant)',
+        '    Example: "ROM: 32 GB DDR5 4800 600 MHZ" → capacidad_gb=32, tipo="DDR5", freq_mhz=4800',
+        '    Example: "ROM: 16 GB DDR4 3200 MHZ"     → capacidad_gb=16, tipo="DDR4", freq_mhz=3200',
+        '',
+        '  STORAGE (look for TBW.2, GBW.2, SSD, HDD, NVMe, M.2):',
+        '    "1 TBW.2 SSD NVMe"  → 1000 GB, "M.2 NVMe SSD"',
+        '    "512 GBW.2 SSD"     → 512 GB,  "M.2 SSD"',
+        '    "256 GBW.2 SSD"     → 256 GB,  "M.2 SSD"',
+        '    "2 TBW.2 SSD NVMe"  → 2000 GB, "M.2 NVMe SSD"',
+        '    (W.2 = M.2, OCR noise)',
+        '',
+        '  OS: "WINDOWS11" / "WINDOWS 11" / "SIST OPER: WINDOWS" → "Windows 11"',
+        '  BRAND: "KENYA" / "UNIDAD KENYA TECHNOLOGY" → "Kenya Technology"',
+        '  LAN: "LAN: SI" → true | "WLAN: SI"/"STUBS"/"STTBS" → true',
+        '  VGA: "VGA: NO"/"NODPMT"/"NODMT" → false',
+        '  WARRANTY: "G.F: 36 MESES" / "G.F: P: 36" → garantia_min_meses=36',
+        '  10+-digit numbers (74689500001) → catalog codes, skip',
+        '',
+        'Output ONLY the JSON. No markdown fences. No explanation.',
+      ].join('\n');
+
+      console.log(`[aiService] CALL2 text-only decode → JSON`);
+      const decResp = await client.chat.completions.create({
+        model: visionModel,
+        max_completion_tokens: 1500,
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user',   content },
+          { role: 'user',   content: DECODE_PROMPT },
         ],
       });
 
-      const raw = resp.choices[0]?.message?.content || '';
-      console.log(`[aiService] Vision [${label}] result (${raw.length} chars):\n${raw.substring(0, 1500)}`);
+      const raw = decResp.choices[0]?.message?.content || '';
+      console.log(`[aiService] CALL2 result (${raw.length} chars):\n${raw.substring(0, 1500)}`);
       const parsed = parseAIResponse(raw);
       if (parsed.equipos && parsed.equipos.length > 0) {
-        console.log(`[aiService] ✅ Vision [${label}]: ${parsed.equipos.length} equipo(s) extraído(s)`);
+        console.log(`[aiService] ✅ [${label}]: ${parsed.equipos.length} equipo(s) extraído(s)`);
         return parsed;
       }
-      console.log(`[aiService] Vision [${label}] → equipos:[] — siguiente intento`);
+      console.log(`[aiService] [${label}] equipos:[] — next attempt`);
     } catch (e) {
-      console.warn(`[aiService] Vision [${label}] error: ${e.message}`);
+      console.warn(`[aiService] [${label}] error: ${e.message}`);
     }
   }
 
-  console.warn('[aiService] Todos los intentos de visión directa devolvieron vacío');
+  console.warn('[aiService] All vision attempts returned empty');
   return { equipos: [] };
 }
-
 /**
  * Envía imágenes de páginas del PDF a Anthropic Vision usando 2 pasos (OCR + extracción).
  */
