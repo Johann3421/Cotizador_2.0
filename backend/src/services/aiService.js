@@ -568,30 +568,27 @@ async function renderPdfPagesToImages(pdfBuffer) {
     const loadTask      = pdfjsLib.getDocument({ data, verbosity: 0, canvasFactory });
     const pdf           = await loadTask.promise;
 
-    const maxPages = Math.min(pdf.numPages, 4);
+    const maxPages = Math.min(pdf.numPages, 2); // 2 págs × 2 rotaciones = 4 imágenes
     const pages    = [];
     const SCALE    = 4.0; // 4x = mejor resolución para documentos SIGA rotados/escaneados
 
     for (let i = 1; i <= maxPages; i++) {
-      const page     = await pdf.getPage(i);
-      const viewport = page.getViewport({ scale: SCALE });
-      const { canvas, context } = canvasFactory.create(viewport.width, viewport.height);
+      const page = await pdf.getPage(i);
 
-      await page.render({
-        canvasContext: context,
-        viewport,
-        canvasFactory,
-      }).promise;
+      // Orientación natural del PDF
+      const vp0 = page.getViewport({ scale: SCALE });
+      const { canvas: c0, context: ctx0 } = canvasFactory.create(vp0.width, vp0.height);
+      await page.render({ canvasContext: ctx0, viewport: vp0, canvasFactory }).promise;
+      pages.push({ base64: c0.toBuffer('image/png').toString('base64'), width: vp0.width, height: vp0.height, rotation: 0 });
 
-      const pngBuffer = canvas.toBuffer('image/png');
-      pages.push({
-        base64: pngBuffer.toString('base64'),
-        width:  viewport.width,
-        height: viewport.height,
-      });
+      // Variante +90°: convierte landscape→portrait (cubre escaneos SIGA en horizontal)
+      const vp90 = page.getViewport({ scale: SCALE, rotation: 90 });
+      const { canvas: c90, context: ctx90 } = canvasFactory.create(vp90.width, vp90.height);
+      await page.render({ canvasContext: ctx90, viewport: vp90, canvasFactory }).promise;
+      pages.push({ base64: c90.toBuffer('image/png').toString('base64'), width: vp90.width, height: vp90.height, rotation: 90 });
     }
 
-    console.log(`[aiService] PDF renderizado: ${pages.length} página(s) como PNG`);
+    console.log(`[aiService] PDF renderizado: ${pages.length} variante(s) (${maxPages} pág × 2 rotaciones)`);
     return pages;
   } catch (err) {
     console.warn('[aiService] Error renderizando PDF a imágenes:', err.message);
@@ -770,18 +767,18 @@ async function extractScannedWithOpenAI(pages) {
     return parseAIResponse(directRaw);
   }
 
-  // ── PASO 2: Extracción con cadena de pensamiento (chain-of-thought) ─────────
-  // El modelo primero busca EXPLÍCITAMENTE cada campo antes de generar el JSON.
-  // Esto fuerza precisión quirúrgica: si no encontró el campo → null, nunca hallucina.
-  console.log(`[aiService] Paso 2 Extracción model=${visionModel}`);
+  // ── PASO 2: Extracción multimodal (chain-of-thought + imágenes originales) ──────
+  // Se envían TODAS las variantes de imagen (distintas rotaciones) junto con el texto OCR.
+  // Si el OCR perdió campos por rotación incorrecta, gpt-4o los lee directo de las imágenes.
+  console.log(`[aiService] Paso 2 Extracción multimodal model=${visionModel} (${pages.length} imgs + OCR)`);
   const extractionPrompt = [
-    'Tienes el siguiente texto extraído por OCR de un documento de compra, licitación o ficha técnica.',
-    'Necesitas extraer especificaciones de COMPUTADORAS DE ESCRITORIO, LAPTOPS o WORKSTATIONS.',
-    'Ignora monitores, impresoras, escáneres, servicios y cualquier ítem que no sea una computadora.',
+    'CONTEXTO: Recibes las IMÁGENES DEL DOCUMENTO (adjuntas arriba, en múltiples orientaciones) Y el texto OCR (al final del mensaje).',
+    'El OCR puede ser PARCIAL o contener errores de rotación. Si un campo NO aparece en el OCR o parece incorrecto, BÚSCALO DIRECTAMENTE EN LAS IMÁGENES adjuntas.',
+    'Objetivo: extraer especificaciones de COMPUTADORAS DE ESCRITORIO, LAPTOPS o WORKSTATIONS. Ignora monitores, impresoras, escáneres y servicios.',
     '',
     '════ PASO 1: BÚSQUEDA EXPLÍCITA ════',
-    'Recorre el texto línea por línea y copia la línea completa donde encuentres cada campo.',
-    'Si no encuentras el campo, escribe exactamente: NO ENCONTRADO',
+    'Busca cada campo PRIMERO en el texto OCR (fin del mensaje). Si el OCR no lo contiene o dice NO ENCONTRADO, búscalo en las IMÁGENES adjuntas (una de las orientaciones tendrá el texto legible).',
+    'Copia la línea exacta de donde lo encontraste (OCR o imagen). Si no está en ningún sitio: NO ENCONTRADO.',
     '',
     'A) TIPO DE EQUIPO — busca: COMPUTADORA, CPU, LAPTOP, NOTEBOOK, DESKTOP, WORKSTATION, ALL IN ONE, EQUIPO DE COMPUTO, UNIDAD CENTRAL, COMPUTADORA DE PROCESO',
     '   → Línea(s) encontrada(s):',
@@ -855,12 +852,16 @@ async function extractScannedWithOpenAI(pages) {
     '---FIN TEXTO OCR---',
   ].join('\n');
 
+  // Adjuntar imágenes (todas las rotaciones) + texto del prompt en un solo mensaje multimodal
+  const extractContent = buildImageContent(pages);
+  extractContent.push({ type: 'text', text: extractionPrompt });
+
   const extractResponse = await client.chat.completions.create({
     model: visionModel,
     max_completion_tokens: 4096,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user',   content: extractionPrompt },
+      { role: 'user',   content: extractContent },
     ],
   });
 
