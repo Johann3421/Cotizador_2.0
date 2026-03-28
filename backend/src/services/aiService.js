@@ -301,15 +301,101 @@ async function extractWithOpenAI(base64Image, mimeType) {
   const OpenAI = require('openai');
   const client = new OpenAI({ apiKey: process.env.AI_API_KEY });
 
-  const model  = process.env.AI_MODEL || 'gpt-4o';
-  const isPdf  = mimeType === 'application/pdf';
+  const model       = process.env.AI_MODEL || 'gpt-4o';
+  const visionModel = process.env.AI_VISION_MODEL || 'gpt-4o';
+  const isPdf       = mimeType === 'application/pdf';
 
-  const userContent = isPdf ? [
-    {
-      type: 'text',
-      text: `El siguiente texto fue extraído de un PDF con los requerimientos técnicos.\nAnaliza el texto y extrae todos los requerimientos de equipos de cómputo. Responde SOLO con el JSON.\n\n${Buffer.from(base64Image, 'base64').toString('utf8')}`,
-    },
-  ] : [
+  // ── PDFs with extracted text: use chain-of-thought + gpt-4o (same as scanned path) ──
+  if (isPdf) {
+    const texto = Buffer.from(base64Image, 'base64').toString('utf8');
+    console.log(`[aiService] PDF-texto CoT model=${visionModel} (${texto.length} chars)`);
+    const cotPrompt = [
+      'Tienes el siguiente texto extraído de un documento de compra, licitación o ficha técnica.',
+      'Necesitas extraer especificaciones de COMPUTADORAS DE ESCRITORIO, LAPTOPS o WORKSTATIONS.',
+      'Ignora monitores, impresoras, escáneres, servicios y cualquier ítem que no sea una computadora.',
+      '',
+      '════ PASO 1: BÚSQUEDA EXPLÍCITA ════',
+      'Recorre el texto línea por línea y copia la línea completa donde encuentres cada campo.',
+      'Si no encuentras el campo, escribe exactamente: NO ENCONTRADO',
+      '',
+      'A) TIPO DE EQUIPO — busca: COMPUTADORA, CPU, LAPTOP, NOTEBOOK, DESKTOP, WORKSTATION, ALL IN ONE, EQUIPO DE COMPUTO, UNIDAD CENTRAL, COMPUTADORA DE PROCESO',
+      '   → Línea(s) encontrada(s): [COPIA LA LÍNEA COMPLETA]',
+      '',
+      'B) CANTIDAD — busca columna CANT. o CANTIDAD junto al ítem de la computadora',
+      '   → Valor encontrado:',
+      '',
+      'C) PROCESADOR — busca: PROCESADOR, PROC:, INTEL CORE, AMD RYZEN, CORE I3, CORE I5, CORE I7, CORE I9, CORE ULTRA, XEON, RYZEN 3/5/7/9',
+      '   → Línea(s) encontrada(s): [COPIA LA LÍNEA COMPLETA EXACTA]',
+      '   → Número de modelo (copia los dígitos carácter por carácter, ej: si dice "I7- 14700" escribe "14700"):',
+      '',
+      'D) MEMORIA RAM — busca: RAM:, ROM: (¡CRÍTICO! en docs SIGA "ROM: XX GB" significa RAM), MEMORIA, DDR4, DDR5, LPDDR5',
+      '   → Línea(s) encontrada(s): [COPIA LA LÍNEA COMPLETA EXACTA, incluyendo "ROM: XX GB ..." si aparece]',
+      '   → Capacidad en GB (número antes de "GB"):',
+      '   → Tipo de memoria (DDR4/DDR5/etc):',
+      '',
+      'E) ALMACENAMIENTO — busca: SSD, HDD, NVMe, M.2, DISCO, TB, GB SSD, GB HDD, TBW.2, GBW.2',
+      '   → Línea(s) encontrada(s):',
+      '',
+      'F) SISTEMA OPERATIVO — busca: WINDOWS, LINUX, SO:, SISTEMA OPERATIVO, SIST OPER, S.O.',
+      '   → Línea(s) encontrada(s):',
+      '',
+      'G) GRÁFICA — busca: GPU, GRAFICA, TARJETA DE VIDEO, VRAM, NVIDIA, AMD RADEON, INTEGRADA, DEDICADA',
+      '   → Línea(s) encontrada(s):',
+      '',
+      'H) CONECTIVIDAD — busca: LAN, WLAN, WIFI, HDMI, VGA, DISPLAYPORT, USB, BLUETOOTH',
+      '   → Línea(s) encontrada(s):',
+      '',
+      '════ PASO 2: DECODIFICACIÓN ════',
+      'Aplica este glosario SIGA a los valores de PASO 1:',
+      '  "ROM: 32 GB DDR5 4800"       → RAM: 32 GB DDR5 @ 4800 MHz',
+      '  "1 TBW.2 SSD NVMe"           → 1 TB M.2 NVMe SSD  (W = M con ruido OCR)',
+      '  "512 GBW.2 SSD"              → 512 GB M.2 SSD',
+      '  "I7- 14700" o "I7 14700"     → Core i7-14700  (espacio = ruido OCR)',
+      '  "I5- 13400"                  → Core i5-13400',
+      '  "WINDOWS11" / "WINDOWS 11"   → Windows 11',
+      '  "JDR5" / "0DR5"              → DDR5',
+      '  "4800 600 MHZ"               → 4800 MHz  (600 = ancho de banda, no frecuencia)',
+      '  "NODPMT" / "NO"              → false',
+      '  "STUBS" / "STTBS" / "SI"     → true',
+      '  Códigos de 10+ dígitos       → ignorar (son códigos de catálogo SIGA)',
+      '',
+      '════ PASO 2.5: VERIFICACIÓN ════',
+      'Antes del JSON completa esta tabla:',
+      '  • Procesador hallado en PASO 1-C: ___  Dígitos del modelo copiados: ___',
+      '  • RAM hallada en PASO 1-D: ___  Capacidad GB: ___  Tipo DDR: ___',
+      '  • Almacenamiento hallado en PASO 1-E: ___  Tamaño: ___  Tipo: ___',
+      '  • Sistema Operativo hallado en PASO 1-F: ___',
+      '',
+      '════ PASO 3: JSON FINAL ════',
+      'REGLAS DE VINCULACIÓN ESTRICTA — cada campo DEBE derivarse de PASO 2.5:',
+      '  1. procesador.modelo_principal: usa los dígitos exactos de PASO 2.5 sin cambiar ni un dígito.',
+      '     ANTI-SUSTITUCIÓN: 14700 ≠ 11700 ≠ 11400. Cópialo exactamente.',
+      '  2. memoria_ram.capacidad_gb: usa el número de "Capacidad GB" de PASO 2.5. "ROM: 32 GB" → 32.',
+      '     memoria_ram.tipo: usa "Tipo DDR" de PASO 2.5.',
+      '  3. sistema_operativo: usa PASO 2.5. "WINDOWS11" → "Windows 11".',
+      '  4. Campo NO encontrado en PASO 1 → null. NUNCA inventes valores.',
+      '  5. Solo monitores/impresoras sin CPU → equipos: []',
+      '',
+      'Responde con EL JSON SOLAMENTE.',
+      '',
+      '---TEXTO---',
+      texto,
+      '---FIN TEXTO---',
+    ].join('\n');
+    const cotResponse = await client.chat.completions.create({
+      model: visionModel,
+      max_completion_tokens: 4096,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user',   content: cotPrompt },
+      ],
+    });
+    const cotRaw = cotResponse.choices[0]?.message?.content || '';
+    console.log(`[aiService] PDF-texto CoT resultado (primeros 2000):\n${cotRaw.substring(0, 2000)}`);
+    return parseAIResponse(cotRaw);
+  }
+
+  const userContent = [
     {
       type: 'image_url',
       image_url: { url: `data:${mimeType};base64,${base64Image}`, detail: 'high' },
@@ -321,8 +407,7 @@ async function extractWithOpenAI(base64Image, mimeType) {
   ];
 
   // Para vision usar AI_VISION_MODEL (default gpt-4o) — gpt-5-mini no soporta vision
-  const visionModel = process.env.AI_VISION_MODEL || 'gpt-4o';
-  const effectiveModel = isPdf ? model : visionModel;
+  const effectiveModel = visionModel;
   console.log(`[aiService] extractWithOpenAI model=${effectiveModel} (AI_MODEL=${model}, AI_VISION_MODEL=${process.env.AI_VISION_MODEL || 'n/a'}) isPdf=${isPdf}`);
   const response = await client.chat.completions.create({
     model: effectiveModel,
@@ -485,7 +570,7 @@ async function renderPdfPagesToImages(pdfBuffer) {
 
     const maxPages = Math.min(pdf.numPages, 4);
     const pages    = [];
-    const SCALE    = 3.0; // mayor escala = texto más legible para el modelo de visión
+    const SCALE    = 4.0; // 4x = mejor resolución para documentos SIGA rotados/escaneados
 
     for (let i = 1; i <= maxPages; i++) {
       const page     = await pdf.getPage(i);
@@ -663,7 +748,10 @@ async function extractScannedWithOpenAI(pages) {
         '',
         'RULES:',
         '1. Use ONLY values visible in the image. If a field is not visible → null.',
-        '2. NEVER fill from memory or assume typical values.',
+        '2. ANTI-HALLUCINATION: NEVER substitute a model number from memory.',
+        '   - If you see "I7- 14700", the model is i7-14700 — NOT i7-11700, NOT i5-11400.',
+        '   - Copy every digit in the processor model number exactly as printed.',
+        '   - "ROM: 32 GB" = RAM 32 GB. Do not ignore or skip the ROM: field.',
         '3. If the only items are monitors, printers or services (no computer CPU) → equipos: []',
         '',
         'Respond with ONLY the JSON, nothing else.',
@@ -702,10 +790,13 @@ async function extractScannedWithOpenAI(pages) {
     '   → Valor encontrado:',
     '',
     'C) PROCESADOR — busca: PROCESADOR, PROC:, INTEL CORE, AMD RYZEN, CORE I3, CORE I5, CORE I7, CORE I9, CORE ULTRA, XEON, RYZEN 3, RYZEN 5, RYZEN 7, RYZEN 9',
-    '   → Línea(s) encontrada(s):',
+    '   → Línea(s) encontrada(s): [COPIA LA LÍNEA COMPLETA EXACTA]',
+    '   → Número de modelo (copia los dígitos carácter por carácter, ej: si dice "I7- 14700" escribe "14700"):',
     '',
-    'D) MEMORIA RAM — busca: RAM, ROM: (en docs SIGA "ROM:" = RAM), MEMORIA, DDR4, DDR5, LPDDR5, GB RAM, GB DDR',
-    '   → Línea(s) encontrada(s):',
+    'D) MEMORIA RAM — busca: RAM:, ROM: (¡CRÍTICO! en docs SIGA "ROM: XX GB" significa RAM con capacidad XX GB), MEMORIA, DDR4, DDR5, LPDDR5, GB RAM, GB DDR',
+    '   → Línea(s) encontrada(s): [COPIA LA LÍNEA COMPLETA EXACTA, incluyendo "ROM: XX GB ..." si aparece]',
+    '   → Capacidad en GB (el número antes de "GB"):',
+    '   → Tipo de memoria (DDR4, DDR5, etc. — "JDR5" y "0DR5" = DDR5):',
     '',
     'E) ALMACENAMIENTO — busca: SSD, HDD, NVMe, M.2, DISCO, ALMACENAMIENTO, TB SSD, GB SSD, TB HDD, GB HDD, TBW.2, GBW.2',
     '   → Línea(s) encontrada(s):',
@@ -735,12 +826,27 @@ async function extractScannedWithOpenAI(pages) {
     '  "G.F: 36 MESES"              → garantia_min_meses: 36',
     '  Códigos de 10+ dígitos       → ignorar (son códigos de catálogo SIGA)',
     '',
+    '════ PASO 2.5: VERIFICACIÓN ANTES DEL JSON ════',
+    'Antes de generar el JSON, completa esta tabla:',
+    '  • Procesador hallado en PASO 1-C: ___  Dígitos del modelo copiados: ___',
+    '  • RAM hallada en PASO 1-D: ___  Capacidad GB: ___  Tipo DDR: ___',
+    '  • Almacenamiento hallado en PASO 1-E: ___  Tamaño: ___  Tipo: ___',
+    '  • Sistema Operativo hallado en PASO 1-F: ___',
+    '',
     '════ PASO 3: JSON FINAL ════',
-    'Usando SOLO lo encontrado en PASO 1 y decodificado en PASO 2, genera el JSON.',
-    'Reglas absolutas:',
-    '  - Campo no encontrado → null. NUNCA inventes un valor.',
-    '  - Solo monitores sin CPU → equipos: []',
-    '  - Si hay computadora → SIEMPRE incluir tipo_equipo y cantidad.',
+    'REGLAS DE VINCULACIÓN ESTRICTA — cada campo en el JSON DEBE derivarse de la tabla de PASO 2.5:',
+    '',
+    '  1. procesador.modelo_principal: toma los dígitos exactos de PASO 2.5 "Dígitos del modelo".',
+    '     ANTI-SUSTITUCIÓN ABSOLUTA: 14700 ≠ 11700 ≠ 11400. Cópialo sin cambiar ni un dígito.',
+    '     Ejemplo: "I7- 14700" → "Core i7-14700"  |  "I5- 13400" → "Core i5-13400"',
+    '',
+    '  2. memoria_ram.capacidad_gb: usa el número de "Capacidad GB" de PASO 2.5. "ROM: 32 GB" → 32.',
+    '     memoria_ram.tipo: usa "Tipo DDR" de PASO 2.5. "JDR5"/"0DR5" → "DDR5".',
+    '',
+    '  3. sistema_operativo: usa lo decodificado de PASO 2.5. "WINDOWS11" → "Windows 11".',
+    '',
+    '  4. Campo NO encontrado en PASO 1 → null. NUNCA inventes ni rellenes con valores típicos.',
+    '  5. Solo monitores/impresoras/servicios sin CPU → equipos: []',
     '',
     'Responde con EL JSON SOLAMENTE (no repitas los pasos ni añadas explicaciones).',
     '',
