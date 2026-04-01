@@ -114,23 +114,24 @@ app.use((req, res) => {
 // INICIAR SERVIDOR
 // ============================================
 async function runMigrations() {
-  try {
-    const migrationsDir = path.join(__dirname, 'db/migrations');
-    const files = fs.readdirSync(migrationsDir)
-      .filter(f => f.endsWith('.sql'))
-      .sort(); // 001_, 002_, ... orden alfabético
+  const migrationsDir = path.join(__dirname, 'db/migrations');
+  const files = fs.readdirSync(migrationsDir)
+    .filter(f => f.endsWith('.sql'))
+    .sort(); // 001_, 002_, ... orden alfabético
 
-    for (const file of files) {
+  for (const file of files) {
+    try {
       const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
       await pool.query(sql);
       console.log(`✅ Migración ejecutada: ${file}`);
-    }
-  } catch (error) {
-    // Las tablas ya podrían existir, eso no es un error
-    if (error.code === '42P07') {
-      console.log('ℹ️  Las tablas ya existen');
-    } else {
-      console.error('⚠️  Error ejecutando migraciones:', error.message);
+    } catch (error) {
+      // 42P07 = tabla/índice ya existe → idempotente, OK
+      if (error.code === '42P07') {
+        console.log(`ℹ️  ${file}: objetos ya existen — omitiendo`);
+      } else {
+        console.error(`⚠️  Error en migración ${file}:`, error.message);
+        // Continúa con la siguiente migración en vez de abortar todo
+      }
     }
   }
 }

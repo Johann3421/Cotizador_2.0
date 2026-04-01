@@ -921,7 +921,7 @@ async function extractSpecsFromImage(imagePath) {
   }
 
   const mimeType  = getMimeType(imagePath);
-  const isPdf     = mimeType === 'application/pdf';
+  const isPdf     = mimeType === 'application/pdf' || mimeType.startsWith('application/pdf');
   const isDocx    = mimeType.includes('wordprocessingml') || mimeType === 'application/msword';
   const isXlsx    = mimeType.includes('spreadsheetml')   || mimeType === 'application/vnd.ms-excel';
   const isOffice  = isDocx || isXlsx;
@@ -1012,8 +1012,23 @@ async function extractSpecsFromUrl(url, token = null) {
     timeout: 15000
   });
 
-  const base64Image = Buffer.from(response.data).toString('base64');
-  const mimeType = response.headers['content-type'] || 'image/jpeg';
+  // content-type may include charset/boundary params: 'application/pdf; charset=UTF-8'
+  const rawMime  = response.headers['content-type'] || 'image/jpeg';
+  const mimeType = rawMime.split(';')[0].trim().toLowerCase();
+
+  const dataBuffer = Buffer.from(response.data);
+
+  // PDFs — route through the same vision pipeline as uploaded PDFs
+  if (mimeType === 'application/pdf') {
+    console.log(`[aiService] extractSpecsFromUrl: PDF detected (${dataBuffer.length} bytes) → vision pipeline`);
+    const result = await extractScannedPdfWithVision(dataBuffer, provider);
+    if (!result.equipos || !Array.isArray(result.equipos)) {
+      throw new Error('La respuesta de la AI no contiene el campo "equipos" esperado.');
+    }
+    return result;
+  }
+
+  const base64Image = dataBuffer.toString('base64');
 
   let result;
   if (provider === 'anthropic') {
