@@ -72,14 +72,22 @@ const searchCompatibleProducts = async (specs) => {
 
     // 3. Calcular scores y filtrar fichas iguales o superiores (score >= 50)
     const conScore = fichas.map(f => ({ ...f, score: calcularScore(f, specs) }));
-    const compatibles = conScore
-      .filter(f => f.score >= 50)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 10);
+    const sorted = conScore.sort((a, b) => b.score - a.score);
+    const compatibles = sorted.filter(f => f.score >= 50).slice(0, 10);
 
-    result[marca] = compatibles;
-    const scores = conScore.map(f => f.score).sort((a, b) => b - a);
-    console.log(`[Scraper] ${marca}: ${compatibles.length} compatibles de ${fichas.length} — scores: [${scores.join(', ')}]`);
+    // Fallback 1: si no hay compatibles exactos (>=50), mostrar los mejores parciales (>=25)
+    // Fallback 2: si tampoco hay parciales, mostrar el top-5 disponible
+    let resultado;
+    if (compatibles.length > 0) {
+      resultado = compatibles;
+    } else {
+      const parciales = sorted.filter(f => f.score >= 25).slice(0, 5);
+      resultado = parciales.length > 0 ? parciales : sorted.slice(0, 5);
+    }
+
+    result[marca] = resultado;
+    const scores = sorted.map(f => f.score);
+    console.log(`[Scraper] ${marca}: ${resultado.length} resultados (${compatibles.length} exactos) de ${fichas.length} — scores: [${scores.join(', ')}]`);
   }
 
   // ── BÚSQUEDA OCULTA POR NÚMERO DE PARTE / MODELO DE REFERENCIA ──────────
@@ -347,7 +355,7 @@ const guardarEnDB = async (fichas, marca, tipo) => {
       `INSERT INTO products (ficha_id,marca,nombre,categoria,specs,pdf_url,url_ficha,ultima_actualizacion)
        VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
        ON CONFLICT (ficha_id) DO UPDATE
-         SET nombre=$3,marca=$2,specs=$5,pdf_url=$6,ultima_actualizacion=NOW()`,
+         SET nombre=$3,marca=$2,categoria=$4,specs=$5,pdf_url=$6,ultima_actualizacion=NOW()`,
       [
         f.fichaId, marca, f.nombre, tipo,
         JSON.stringify({ numeroParte:f.numeroParte, imgUrl:f.imgUrl, pdfUrl:f.pdfUrl,
@@ -498,18 +506,21 @@ const getProcScore = (fichaTexto, _genFromPdf, modelos_req) => {
 
     } else if (genFicha === genReq) {
       // Misma generación → tier decide
+      // No hacemos descarte absoluto por tier: el producto puede ser útil como alternativa
       if (diffTier >= 2)        s = 28;  // tier mucho mayor (i9 vs i5)
       else if (diffTier === 1)  s = 26;  // tier un escalón mayor (i7 vs i5)
       else if (diffTier === 0)  s = 25;  // tier exactamente igual
-      else                      s = 0;   // tier menor → descartar
+      else if (diffTier === -1) s = 8;   // tier -1: alternativa válida, puntaje bajo
+      else                      s = 3;   // tier -2+: muy inferior pero misma gen, no descartar duro
 
     } else {
       // Generación superior → más permisivo con tier
       const genDiff = genFicha - genReq;
-      if (diffTier >= 1)       s = 30;                           // gen mayor Y tier mayor
-      else if (diffTier === 0) s = 29;                           // gen mayor, tier igual
+      if (diffTier >= 1)        s = 30;                          // gen mayor Y tier mayor
+      else if (diffTier === 0)  s = 29;                          // gen mayor, tier igual
       else if (diffTier === -1) s = genDiff >= 2 ? 20 : 15;     // tier -1 pero gen 2+
-      else                     s = 0;                            // tier muy inferior
+      else if (diffTier === -2) s = genDiff >= 2 ? 8 : 3;       // tier -2 compensado por gen
+      else                      s = 0;                           // tier muy inferior, gen no compensa
     }
 
     mejorScore = Math.max(mejorScore, s);
