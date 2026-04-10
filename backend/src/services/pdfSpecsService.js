@@ -97,8 +97,11 @@ const parsearTextoMultimarca = (texto) => {
 
   // ── PROCESADOR ──────────────────────────────────────────────
   const procPatterns = [
+    // Valor en la misma línea: "Procesador    Intel Core i9-14900K\n"
     /Procesador\s+(?:PROCESADOR:\s*)?(.+?)(?:\n|Memoria|Sistema|Chipset|Disco)/is,
     /PROCESADOR[:\s]+(.+?)(?:\n|RAM|MEMORIA|ALMACENAMIENTO)/is,
+    // Valor en la línea siguiente: "PROCESADOR\n Intel Core i9-14900K"
+    /(?:PROCESADOR|Procesador)\s*:?\s*\n\s*(.+)/i,
   ];
   for (const pat of procPatterns) {
     const m = t.match(pat);
@@ -109,8 +112,9 @@ const parsearTextoMultimarca = (texto) => {
     const genMatch = pt.match(/(\d{1,2})(?:°|ª|th|rd|nd|st)?\s*[Gg]eneración/i)
                   || pt.match(/[Cc]ore\s+[iI][3579]-?(\d{2})\d{3}/);
     if (genMatch) specs.procesador_generacion = parseInt(genMatch[1]);
+    // modCore: acepta guión, espacio, o espacio-guión entre tier y número
     const modUltra   = pt.match(/Core\s+Ultra\s+\d+\s*\w*/i);
-    const modCore    = pt.match(/Core\s+[iI][3579]-?\s*\d{4,5}\w*/i);
+    const modCore    = pt.match(/Core\s+[iI][3579][\s-]*\d{4,5}\w*/i);
     const modRyzen   = pt.match(/Ryzen[™\s]+\d+\s*[\w-]+/i);
     const modCeleron = pt.match(/Celeron\s+[\w-]+/i);
     if (modUltra)        specs.procesador_modelo = modUltra[0].replace(/\s+/g, ' ').trim();
@@ -201,10 +205,11 @@ const parsearTextoMultimarca = (texto) => {
     }
   }
   if (specs.grafica_texto) {
+    // Kenya PDFs usan "Dedicado - NVIDIA..." o "Dedicado NVIDIA..."
     if (/integrad/i.test(specs.grafica_texto)) {
       specs.grafica_tipo   = 'integrada';
       specs.grafica_modelo = specs.grafica_texto.replace(/integrado[-–\s]*/i,'').replace(/integrados?/i,'').trim() || 'Integrada';
-    } else {
+    } else if (/dedicad/i.test(specs.grafica_texto) || /nvidia|geforce|radeon|rtx|gtx|arc/i.test(specs.grafica_texto)) {
       specs.grafica_tipo = 'dedicada';
       const vram = specs.grafica_texto.match(/(\d+)\s*GB/i);
       if (vram) specs.grafica_vram_gb = parseInt(vram[1]);

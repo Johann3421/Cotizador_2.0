@@ -43,10 +43,21 @@ const searchCompatibleProducts = async (specs) => {
     // 1. Obtener fichas de DB o scraping
     let fichas = await buscarEnDB(marca, tipo, 20);
     if (fichas.length === 0) {
-      // Término enriquecido: incluye almacenamiento normalizado (1tb, 512gb, etc.)
-      const termino = construirTermino(marca, tipo, specs);
-      console.log(`[Scraper] DB vacía para ${marca}/${tipo} → scraping: "${termino}"`);
-      fichas = await scrapearMarca(marca, tipo, termino !== TERMINOS[tipo]?.[marca] ? termino : null);
+      // Intento 1: búsqueda con almacenamiento específico
+      const terminoEnriquecido = construirTermino(marca, tipo, specs);
+      const usarEnriquecido = terminoEnriquecido !== TERMINOS[tipo]?.[marca];
+      if (usarEnriquecido) {
+        console.log(`[Scraper] DB vacía para ${marca}/${tipo} → scraping enriquecido: "${terminoEnriquecido}"`);
+        fichas = await scrapearMarca(marca, tipo, terminoEnriquecido);
+      }
+      // Intento 2: si el enriquecido devolvió 0, usar término base
+      if (fichas.length === 0) {
+        const terminoBase = TERMINOS[tipo]?.[marca];
+        if (terminoBase) {
+          console.log(`[Scraper] Enriquecido sin resultados → scraping base: "${terminoBase}"`);
+          fichas = await scrapearMarca(marca, tipo, null);
+        }
+      }
       if (fichas.length > 0) await guardarEnDB(fichas, marca, tipo);
     }
 
@@ -247,7 +258,14 @@ const scrapearMarca = async (marca, tipo, terminoPersonalizado = null) => {
     const fichas = await page.$$eval('a.enlace-detalles', (els) => {
       return els.slice(0, 15).map(el => {
         const card        = el.closest('.card');
-        const fichaId     = el.id || '';
+        // fichaId: preferir el.id, luego data-id, luego el anchor del href (ej: #ficha-123)
+        const fichaId     = el.id
+                         || el.getAttribute('data-id')
+                         || el.getAttribute('data-ficha')
+                         || (el.href || '').match(/#(.+)$/)?.[1]
+                         || (el.href || '').match(/[?&]id=([^&]+)/)?.[1]
+                         || el.getAttribute('onclick')?.match(/(\d{4,})/)?.[1]
+                         || '';
         const nombre      = card?.querySelector('.card-title-custom, h4.card-title')?.innerText?.trim() || '';
         const numeroParte = card?.querySelector('.card-title b, h5 b')?.innerText?.trim() || '';
         const imgUrl      = el.getAttribute('data-img')            || '';
@@ -271,6 +289,11 @@ const scrapearMarca = async (marca, tipo, terminoPersonalizado = null) => {
 
         return { fichaId, nombre, numeroParte, imgUrl, pdfUrl, specsFp, specsObj, estado, catalogo, fechaPub };
       });
+    });
+
+    // Asignar fichaId secuencial a los que quedaron sin ID (evita que guardarEnDB los descarte)
+    fichas.forEach((f, idx) => {
+      if (!f.fichaId) f.fichaId = `scraped-${marca}-${tipo}-${idx}-${Date.now()}`;
     });
 
     console.log(`[Scraper] Extraídas ${fichas.length} fichas de ${marca}`);
@@ -437,8 +460,9 @@ const parsearProcesador = (texto) => {
   }
 
   // ── Intel Core clásico (12th – 14th gen) ──────────────────
-  // "Core i7-13700", "Core i5-14400", "i9-14900K"
-  const intelMatch = t.match(/(?:core\s+)?([i][3579])-?(\d{2})(\d{2,3})/);
+  // "Core i7-13700", "Core i5-14400", "i9-14900K", "Core i9 14900", "i7 - 13700"
+  // Permite espacio, guión, o espacio+guión+espacio entre tier y número de modelo
+  const intelMatch = t.match(/(?:core\s+)?([i][3579])[-\s]*?(\d{2})(\d{2,3})/);
   if (intelMatch) {
     const tier = intelMatch[1];                          // 'i3','i5','i7','i9'
     const gen  = parseInt(intelMatch[2]);                // 12, 13, 14
