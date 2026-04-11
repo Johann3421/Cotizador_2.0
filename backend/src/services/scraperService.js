@@ -41,7 +41,7 @@ const searchCompatibleProducts = async (specs) => {
 
   for (const marca of MARCAS) {
     // 1. Obtener fichas de DB o scraping
-    let fichas = await buscarEnDB(marca, tipo, 20);
+    let fichas = await buscarEnDB(marca, tipo, 40);
     if (fichas.length === 0) {
       // Intento 1: búsqueda con almacenamiento específico
       const terminoEnriquecido = construirTermino(marca, tipo, specs);
@@ -254,9 +254,28 @@ const scrapearMarca = async (marca, tipo, terminoPersonalizado = null) => {
       return [];
     }
 
+    // Intentar cargar más resultados haciendo scroll (lazy-load / paginación infinita)
+    // PeruCompras carga más fichas al hacer scroll hasta el final
+    let prevCount = 0;
+    for (let round = 0; round < 4 && count < 30; round++) {
+      prevCount = count;
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await page.waitForTimeout(2000);
+      // Intentar clic en botón "Ver más" / "Cargar más" si existe
+      const loadMore = await page.$('button.btn-load-more, a.ver-mas, button:has-text("Ver más"), button:has-text("Cargar más")');
+      if (loadMore && await loadMore.isVisible()) {
+        await loadMore.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(1500);
+      }
+      count = await page.$$eval('a.enlace-detalles', e => e.length).catch(() => 0);
+      console.log(`[Scraper] Scroll ${round + 1}: ${count} fichas`);
+      if (count <= prevCount) break;  // no cargaron más
+    }
+    console.log(`[Scraper] Total tras scroll: ${count} fichas para "${termino}"`);
+
     // Extraer fichas
     const fichas = await page.$$eval('a.enlace-detalles', (els) => {
-      return els.slice(0, 15).map(el => {
+      return els.slice(0, 30).map(el => {
         const card        = el.closest('.card');
         // fichaId: preferir el.id, luego data-id, luego el anchor del href (ej: #ficha-123)
         const fichaId     = el.id
