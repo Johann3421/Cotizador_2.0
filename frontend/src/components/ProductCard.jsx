@@ -59,7 +59,7 @@ const BRAND_STYLES = {
 export default function ProductCard({ product, requerimiento, onSelect, selected }) {
   const marca = (product.marca || 'otra').toLowerCase();
   const styles = BRAND_STYLES[marca] || { bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-700', badge: 'bg-gray-600' };
-  
+
   // Usar specs del PDF extraído → pdfSpecs.specs
   const pdfSpecs = product.pdfSpecs?.specs || {};
   const score = product.score ?? 50;
@@ -67,7 +67,7 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
   // Comparar specs reales extraídas del PDF con el requerimiento
   // El requerimiento viene del AIService con estructura: memoria_ram.capacidad_gb, grafica.tipo, etc.
   const specChecks = [];
-  
+
   // RAM: comparar capacidad (de estructura anidada de AIService)
   if (requerimiento?.memoria_ram?.capacidad_gb !== undefined) {
     const reqRamGb = parseInt(requerimiento.memoria_ram.capacidad_gb);
@@ -76,7 +76,7 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
     if (prodRamGb >= reqRamGb) status = prodRamGb > reqRamGb ? 'better' : 'ok';
     specChecks.push({ label: `RAM: ${reqRamGb}GB`, status });
   }
-  
+
   // GPU: comparar tipo (integrada vs dedicada)
   if (requerimiento?.grafica) {
     const reqGpuType = (requerimiento.grafica.tipo || '').toLowerCase();
@@ -101,7 +101,7 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
     const label = reqVram > 0 ? `GPU: ${reqGpuType} ${reqVram ? reqVram + 'GB' : ''}` : `GPU: ${reqGpuType}`;
     specChecks.push({ label, status, details: prodVram ? `Ficha: ${prodVram}GB ${prodGpuType}` : `Ficha: ${prodGpuType || 'sin info'}` });
   }
-  
+
   // Almacenamiento: verificar que tenga capacidad suficiente (array structure)
   // Almacenamiento: comparar lista de requerimientos vs unidades encontradas
   if (requerimiento?.almacenamiento && Array.isArray(requerimiento.almacenamiento) && requerimiento.almacenamiento.length > 0) {
@@ -161,7 +161,57 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
     const details = missing.length > 0 ? `Faltan: ${missing.join(', ')}` : `Unidades: ${prodList.map(p => p.gb + 'GB').join(', ')}`;
     specChecks.push({ label, status, details });
   }
-  
+
+  // ── Helpers de CPU (definidos aquí para estar disponibles en el bloque) ──────
+  const parseCpu = (txt) => {
+    if (!txt) return null;
+    const t = txt.toLowerCase();
+    // Core Ultra: rawGen basado en serie (2xx → S2=16, 1xx → S1=15)
+    if (/ultra/i.test(t)) {
+      const fam = (t.match(/ultra\s*([579])/) || [null, ''])[1] || '7';
+      const modelNum = t.match(/ultra\s*[579]\s+(\d{3,5})/i);
+      let raw = 16;
+      if (modelNum) { const n = parseInt(modelNum[1]); raw = n >= 200 ? 16 : 15; }
+      return { arch: 'intel', family: `ultra ${fam}`, rawGen: raw };
+    }
+    // Intel clásico i3/i5/i7/i9
+    const intel = t.match(/(?:core\s+)?i([3579])[\s-]*(\d{2,5})/i);
+    if (intel) {
+      const fam = `i${intel[1]}`;
+      const num = (intel[2] || '').toString();
+      const raw = num.length >= 2 ? parseInt(num.slice(0, 2)) : undefined;
+      return { arch: 'intel', family: fam, rawGen: raw };
+    }
+    // AMD Ryzen
+    const amd = t.match(/ryzen\s*([3579])\D*(\d{2,5})/i) || t.match(/ryzen\s*(\d{2,5})/i);
+    if (amd) {
+      const fam = amd[1] ? `ryzen ${amd[1]}` : 'ryzen';
+      const num = (amd[2] || '').toString();
+      const raw = num.length >= 2 ? parseInt(num.slice(0, 2)) : undefined;
+      return { arch: 'amd', family: fam, rawGen: raw };
+    }
+    const num = t.match(/(\d{2,3})/);
+    if (num) return { arch: 'unknown', family: 'unknown', rawGen: parseInt(num[1].slice(0, 2)) };
+    return null;
+  };
+
+  const rank = (fam) => {
+    if (!fam) return 0;
+    const f = fam.toLowerCase();
+    if (f.startsWith('ultra 9')) return 10;
+    if (f.startsWith('ultra 7')) return 8;
+    if (f.startsWith('ultra 5')) return 6;
+    if (f.startsWith('ultra'))   return 7;
+    if (f.startsWith('i9'))      return 9;
+    if (f.startsWith('i7'))      return 7;
+    if (f.startsWith('i5'))      return 5;
+    if (f.startsWith('i3'))      return 4;
+    if (f.startsWith('ryzen 9')) return 9;
+    if (f.startsWith('ryzen 7')) return 7;
+    if (f.startsWith('ryzen 5')) return 5;
+    return 3;
+  };
+
   // Procesador: comparar contra TODOS los modelos aceptados (OR logic)
   if (requerimiento?.procesador?.modelo_principal) {
     const reqModels = [
@@ -224,7 +274,7 @@ export default function ProductCard({ product, requerimiento, onSelect, selected
 
   return (
     <div className={`
-      card transition-all duration-200 
+      card transition-all duration-200
       ${selected ? 'ring-2 ring-kenya-500 border-kenya-300' : ''}
       hover:shadow-md
     `}>
