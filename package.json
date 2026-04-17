@@ -1,0 +1,22 @@
+{
+  "name": "cotizador_2.0",
+  "version": "1.0.0",
+  "description": "Sistema de cotización inteligente para **Kenya** (empresa distribuidora de tecnología en Perú). Permite a los vendedores subir imágenes de requerimientos y que la IA extraiga automáticamente las especificaciones técnicas, busque fichas compatibles en PeruCompras y genere cotizaciones listas para enviar.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
+    "axios": "^1.15.0",
+    "canvas": "^3.2.3",
+    "mammoth": "^1.12.0",
+    "openai": "^6.34.0",
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.6.205",
+    "xlsx": "^0.18.5"
+  }
+}
